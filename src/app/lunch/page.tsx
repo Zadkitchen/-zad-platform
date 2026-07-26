@@ -1,50 +1,101 @@
-"use client";
+import { createClient } from "../../lib/supabase/server";
+import type { MenuProduct } from "../../types/menu";
+import LunchMenuClient from "./LunchMenuClient";
 
-import { useMemo, useState } from "react";
+export const dynamic = "force-dynamic";
 
-import MenuToolbar from "../../components/menu/MenuToolbar";
-import ProductCard from "../../components/ProductCard";
-import { lunchProducts } from "../../data/lunch-products";
+type DatabaseProduct = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  price: number;
+  image_url: string | null;
+  size: string | null;
+  featured: boolean | null;
+  available: boolean | null;
+};
 
-export default function LunchPage() {
-  const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState("");
+export default async function LunchPage() {
+  const supabase = await createClient();
 
-  const categories = useMemo(() => {
-    return Array.from(
-      new Set(
-        lunchProducts
-          .map((product) => product.category)
-          .filter(
-            (category): category is string =>
-              typeof category === "string" && category.length > 0
-          )
-      )
-    );
-  }, []);
-
-  const filteredProducts = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-
-    return lunchProducts.filter((product) => {
-      const productCategory = product.category ?? "";
-
-      const matchesCategory =
-        activeCategory === "" ||
-        productCategory === activeCategory;
-
-      const matchesSearch =
-        normalizedSearch === "" ||
-        product.name.toLowerCase().includes(normalizedSearch) ||
-        productCategory.toLowerCase().includes(normalizedSearch);
-
-      return matchesCategory && matchesSearch;
+  const { data, error } = await supabase
+    .from("products")
+    .select(
+      `
+        id,
+        name,
+        description,
+        category,
+        price,
+        image_url,
+        size,
+        featured,
+        available
+      `
+    )
+    .in("menu_type", ["lunch", "both"])
+    .eq("available", true)
+    .order("sort_order", {
+      ascending: true,
+    })
+    .order("created_at", {
+      ascending: false,
     });
-  }, [search, activeCategory]);
 
-  const visibleCategories = activeCategory
-    ? [activeCategory]
-    : categories;
+  if (error) {
+    console.error(
+      "LUNCH PRODUCTS ERROR:",
+      error.message
+    );
+
+    return (
+      <main
+        dir="rtl"
+        className="min-h-screen bg-[#090909] px-4 py-10 text-white"
+      >
+        <div className="mx-auto max-w-7xl">
+          <div className="rounded-3xl border border-red-500/20 bg-red-500/10 px-6 py-16 text-center">
+            <h1 className="text-2xl font-black text-red-400">
+              تعذر تحميل منيو الغداء
+            </h1>
+
+            <p className="mt-3 text-white/60">
+              راجع Terminal لمعرفة تفاصيل الخطأ.
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const databaseProducts =
+    (data ?? []) as DatabaseProduct[];
+
+  const products: MenuProduct[] =
+    databaseProducts.map((product) => ({
+      id: product.id,
+      name: product.name,
+      price: Number(product.price),
+
+      description:
+        product.description ?? undefined,
+
+      category:
+        product.category ?? undefined,
+
+      image:
+        product.image_url ?? undefined,
+
+      size:
+        product.size ?? undefined,
+
+      featured:
+        product.featured ?? false,
+
+      available:
+        product.available ?? true,
+    }));
 
   return (
     <main
@@ -66,69 +117,7 @@ export default function LunchPage() {
           </p>
         </header>
 
-        <MenuToolbar
-          search={search}
-          onSearchChange={setSearch}
-          categories={categories}
-          activeCategory={activeCategory}
-          onCategoryChange={setActiveCategory}
-        />
-
-        {filteredProducts.length === 0 ? (
-          <div className="rounded-3xl border border-white/10 bg-[#111] px-6 py-16 text-center">
-            <p className="text-2xl font-black text-[#d4af37]">
-              ما لقينا نتائج
-            </p>
-
-            <p className="mt-3 text-white/50">
-              جرّب تكتب اسم ثاني أو اختار تصنيف مختلف.
-            </p>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSearch("");
-                setActiveCategory("");
-              }}
-              className="mt-6 rounded-full border border-[#d4af37]/50 px-6 py-3 font-bold text-[#d4af37] transition hover:bg-[#d4af37] hover:text-black"
-            >
-              عرض كل الوجبات
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-12">
-            {visibleCategories.map((category) => {
-              const products = filteredProducts.filter(
-                (product) => product.category === category
-              );
-
-              if (products.length === 0) return null;
-
-              return (
-                <section key={category}>
-                  <div className="mb-5 flex items-center gap-3">
-                    <span className="h-px flex-1 bg-white/10" />
-
-                    <h2 className="text-2xl font-black text-[#d4af37]">
-                      {category}
-                    </h2>
-
-                    <span className="h-px flex-1 bg-white/10" />
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {products.map((product) => (
-                      <ProductCard
-                        key={product.id}
-                        product={product}
-                      />
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-        )}
+        <LunchMenuClient products={products} />
       </div>
     </main>
   );
