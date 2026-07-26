@@ -1,0 +1,39 @@
+export type ProductOption = {
+  id: string;
+  name: string;
+  price: number;
+};
+
+export type ProductSize = {
+  id: string;
+  name: string;
+  price: number;
+};
+
+export type MenuProduct = {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  price: number;
+  image?: string;
+  featured?: boolean;
+  available?: boolean;
+  size?: string;
+  sizes?: ProductSize[];
+  extras?: ProductOption[];
+};
+
+export type SelectedProductExtra = {
+  id: string;
+  name: string;
+  price: number;
+};
+
+export type ProductSelection = {
+  productId: string;
+  selectedSize?: ProductSize;
+  selectedExtras: SelectedProductExtra[];
+  quantity: number;
+  note: string;
+};
