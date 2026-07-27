@@ -35,7 +35,7 @@ const SOUND_INTERVAL = 7000;
 const SOUND_STORAGE_KEY = "zad-admin-sound-enabled";
 
 function formatPrice(value: number | null) {
-  return new Intl.NumberFormat("ar-IQ").format(
+  return new Intl.NumberFormat("en-US").format(
     Number(value ?? 0)
   );
 }
@@ -49,22 +49,27 @@ function parseOrder(
 ): RealtimeOrder {
   return {
     id: String(record.id ?? ""),
+
     customer_name:
       typeof record.customer_name === "string"
         ? record.customer_name
         : null,
+
     customer_phone:
       typeof record.customer_phone === "string"
         ? record.customer_phone
         : null,
+
     total:
       typeof record.total === "number"
         ? record.total
         : Number(record.total ?? 0),
+
     status:
       typeof record.status === "string"
         ? record.status
         : null,
+
     created_at:
       typeof record.created_at === "string"
         ? record.created_at
@@ -195,6 +200,25 @@ export default function OrderNotifications() {
     stopSound();
     setShowAlert(false);
   }, [stopSound]);
+
+  const openOrderDetails = useCallback(
+    (orderId: string) => {
+      if (!orderId) {
+        console.error("Order ID is missing.");
+        return;
+      }
+
+      stopSound();
+
+      setShowAlert(false);
+      setUnseenCount(0);
+
+      window.location.assign(
+        `/admin/orders/${encodeURIComponent(orderId)}`
+      );
+    },
+    [stopSound]
+  );
 
   useEffect(() => {
     const audio = new Audio(SOUND_PATH);
@@ -338,8 +362,7 @@ export default function OrderNotifications() {
           dir="rtl"
           className="fixed bottom-20 left-5 z-[95] max-w-sm rounded-2xl border border-amber-400/30 bg-zinc-950 p-4 text-sm text-white shadow-2xl"
         >
-          المتصفح منع تشغيل الصوت تلقائيًا. اضغط
-          زر{" "}
+          المتصفح منع تشغيل الصوت تلقائيًا. اضغط زر{" "}
           <strong className="text-amber-400">
             فعّل صوت الطلبات
           </strong>{" "}
@@ -382,10 +405,7 @@ export default function OrderNotifications() {
                   </p>
 
                   <p className="mt-1 font-black text-amber-400">
-                    #
-                    {getOrderReference(
-                      latestOrder.id
-                    )}
+                    #{getOrderReference(latestOrder.id)}
                   </p>
                 </div>
 
@@ -395,10 +415,7 @@ export default function OrderNotifications() {
                   </p>
 
                   <p className="mt-1 font-black text-emerald-400">
-                    {formatPrice(
-                      latestOrder.total
-                    )}{" "}
-                    د.ع
+                    {formatPrice(latestOrder.total)} د.ع
                   </p>
                 </div>
               </div>
@@ -431,8 +448,7 @@ export default function OrderNotifications() {
 
               {unseenCount > 1 && (
                 <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-center text-sm font-bold text-amber-300">
-                  يوجد {unseenCount} طلبات جديدة غير
-                  مشاهدة
+                  يوجد {unseenCount} طلبات جديدة غير مشاهدة
                 </div>
               )}
 
@@ -450,15 +466,9 @@ export default function OrderNotifications() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    const orderId = latestOrder.id;
-
-                    acknowledgeOrders();
-
-                    router.push(
-                      `/admin/orders/${orderId}`
-                    );
-                  }}
+                  onClick={() =>
+                    openOrderDetails(latestOrder.id)
+                  }
                   className="rounded-2xl bg-white px-5 py-4 font-black text-black transition hover:bg-zinc-200"
                 >
                   فتح تفاصيل الطلب
