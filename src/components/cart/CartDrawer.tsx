@@ -6,7 +6,20 @@ import { useEffect, useState } from "react";
 import { useCart } from "../../context/cart-context";
 import CartItem from "./CartItem";
 
-const WHATSAPP_NUMBER = "9647722032536";
+type PlatformSettings = {
+  restaurant_name?: string;
+  slogan?: string;
+  whatsapp_number?: string;
+  accepting_orders?: boolean;
+  kitchen_open?: boolean;
+  minimum_order?: number;
+  closed_message?: string;
+  orders_paused_message?: string;
+};
+
+const DEFAULT_WHATSAPP_NUMBER = "9647722032536";
+const DEFAULT_RESTAURANT_NAME = "مطبخ زاد";
+const DEFAULT_SLOGAN = "زاد... نكهة تستحق العودة";
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat("ar-US").format(price);
@@ -26,6 +39,20 @@ export default function CartDrawer() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [orderNote, setOrderNote] = useState("");
+
+  const [settings, setSettings] = useState<PlatformSettings>({
+    restaurant_name: DEFAULT_RESTAURANT_NAME,
+    slogan: DEFAULT_SLOGAN,
+    whatsapp_number: DEFAULT_WHATSAPP_NUMBER,
+    accepting_orders: true,
+    kitchen_open: true,
+    minimum_order: 0,
+    closed_message: "نعتذر، المطبخ مغلق حالياً.",
+    orders_paused_message:
+      "نعتذر، تم إيقاف استقبال الطلبات مؤقتاً.",
+  });
+
+  const [settingsLoading, setSettingsLoading] = useState(true);
 
   useEffect(() => {
     if (!isCartOpen) return;
@@ -52,7 +79,62 @@ export default function CartDrawer() {
     };
   }, [closeCart]);
 
-   const createWhatsAppMessage = () => {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPlatformSettings() {
+      try {
+        const response = await fetch("/api/platform-settings", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("تعذر تحميل إعدادات المنصة");
+        }
+
+        const data = (await response.json()) as PlatformSettings;
+
+        if (!isMounted) return;
+
+        setSettings((currentSettings) => ({
+          ...currentSettings,
+          ...data,
+          whatsapp_number:
+            data.whatsapp_number?.replace(/[^\d]/g, "") ||
+            DEFAULT_WHATSAPP_NUMBER,
+        }));
+      } catch (error) {
+        console.error("Platform settings error:", error);
+      } finally {
+        if (isMounted) {
+          setSettingsLoading(false);
+        }
+      }
+    }
+
+    loadPlatformSettings();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const restaurantName =
+    settings.restaurant_name?.trim() || DEFAULT_RESTAURANT_NAME;
+
+  const slogan =
+    settings.slogan?.trim() || DEFAULT_SLOGAN;
+
+  const whatsappNumber =
+    settings.whatsapp_number?.replace(/[^\d]/g, "") ||
+    DEFAULT_WHATSAPP_NUMBER;
+
+  const minimumOrder = Math.max(
+    0,
+    Number(settings.minimum_order ?? 0)
+  );
+
+  const createWhatsAppMessage = () => {
     const orderItems = items
       .map((item, index) => {
         const itemTotal = item.price * item.quantity;
@@ -71,7 +153,7 @@ export default function CartDrawer() {
       .join("\n\n");
 
     return [
-      "السلام عليكم، أريد تأكيد طلب من مطبخ زاد:",
+      `السلام عليكم، أريد تأكيد طلب من ${restaurantName}:`,
       "",
       orderItems,
       "",
@@ -87,12 +169,42 @@ export default function CartDrawer() {
         ? "ملاحظات الطلب: " + orderNote
         : "ملاحظات الطلب: لا توجد",
       "",
-      "زاد... نكهة تستحق العودة",
+      slogan,
     ].join("\n");
   };
 
   const handleCheckout = () => {
     if (items.length === 0) return;
+
+    if (settingsLoading) {
+      alert("يرجى الانتظار لحين تحميل إعدادات المنصة");
+      return;
+    }
+
+    if (settings.kitchen_open === false) {
+      alert(
+        settings.closed_message ||
+          "نعتذر، المطبخ مغلق حالياً."
+      );
+      return;
+    }
+
+    if (settings.accepting_orders === false) {
+      alert(
+        settings.orders_paused_message ||
+          "نعتذر، تم إيقاف استقبال الطلبات مؤقتاً."
+      );
+      return;
+    }
+
+    if (minimumOrder > 0 && subtotal < minimumOrder) {
+      alert(
+        `الحد الأدنى للطلب هو ${formatPrice(
+          minimumOrder
+        )} د.ع`
+      );
+      return;
+    }
 
     if (!customerName.trim()) {
       alert("يرجى كتابة اسم الزبون");
@@ -109,19 +221,26 @@ export default function CartDrawer() {
       return;
     }
 
+    if (!whatsappNumber) {
+      alert("رقم الواتساب غير مضبوط في إعدادات المنصة");
+      return;
+    }
+
     const message = createWhatsAppMessage();
 
-  const whatsappUrl =
+    const whatsappUrl =
       "https://wa.me/" +
-      WHATSAPP_NUMBER +
+      whatsappNumber +
       "?text=" +
       encodeURIComponent(message);
+
     window.open(
       whatsappUrl,
       "_blank",
       "noopener,noreferrer"
     );
   };
+
   return (
     <>
       <div
@@ -138,7 +257,7 @@ export default function CartDrawer() {
         dir="rtl"
         role="dialog"
         aria-modal="true"
-        aria-label="سلة طلب مطبخ زاد"
+        aria-label={`سلة طلب ${restaurantName}`}
         className={`fixed right-0 top-0 z-[60] flex h-dvh w-full max-w-[470px] flex-col border-l border-[#d4af37]/20 bg-[#0b0b0b] shadow-2xl transition-transform duration-300 ${
           isCartOpen
             ? "translate-x-0"
@@ -195,6 +314,7 @@ export default function CartDrawer() {
               {items.map((item) => (
                 <CartItem key={item.id} item={item} />
               ))}
+
               <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
                 <h3 className="mb-4 text-lg font-bold text-white">
                   معلومات التوصيل
@@ -204,7 +324,9 @@ export default function CartDrawer() {
                   <input
                     type="text"
                     value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
+                    onChange={(event) =>
+                      setCustomerName(event.target.value)
+                    }
                     placeholder="اسم الزبون"
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
                   />
@@ -212,7 +334,9 @@ export default function CartDrawer() {
                   <input
                     type="tel"
                     value={customerPhone}
-                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    onChange={(event) =>
+                      setCustomerPhone(event.target.value)
+                    }
                     placeholder="رقم الهاتف"
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
                   />
@@ -220,7 +344,9 @@ export default function CartDrawer() {
                   <textarea
                     rows={3}
                     value={customerAddress}
-                    onChange={(e) => setCustomerAddress(e.target.value)}
+                    onChange={(event) =>
+                      setCustomerAddress(event.target.value)
+                    }
                     placeholder="عنوان التوصيل"
                     className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
                   />
@@ -228,14 +354,39 @@ export default function CartDrawer() {
                   <textarea
                     rows={3}
                     value={orderNote}
-                    onChange={(e) => setOrderNote(e.target.value)}
+                    onChange={(event) =>
+                      setOrderNote(event.target.value)
+                    }
                     placeholder="ملاحظات إضافية"
                     className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
                   />
                 </div>
               </section>
             </div>
-<footer className="border-t border-white/10 bg-[#0d0d0d] px-5 py-5">
+
+            <footer className="border-t border-white/10 bg-[#0d0d0d] px-5 py-5">
+              {minimumOrder > 0 && subtotal < minimumOrder && (
+                <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-300">
+                  الحد الأدنى للطلب هو{" "}
+                  {formatPrice(minimumOrder)} د.ع
+                </div>
+              )}
+
+              {settings.kitchen_open === false && (
+                <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-300">
+                  {settings.closed_message ||
+                    "نعتذر، المطبخ مغلق حالياً."}
+                </div>
+              )}
+
+              {settings.kitchen_open !== false &&
+                settings.accepting_orders === false && (
+                  <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-300">
+                    {settings.orders_paused_message ||
+                      "نعتذر، تم إيقاف استقبال الطلبات مؤقتاً."}
+                  </div>
+                )}
+
               <div className="mb-4 flex items-center justify-between">
                 <span className="text-neutral-400">
                   المجموع الكلي
@@ -250,9 +401,18 @@ export default function CartDrawer() {
                 <button
                   type="button"
                   onClick={handleCheckout}
-                  className="rounded-xl bg-[#d4af37] px-5 py-4 font-black text-black transition hover:bg-[#efd46b] active:scale-[0.99]"
+                  disabled={
+                    settingsLoading ||
+                    settings.kitchen_open === false ||
+                    settings.accepting_orders === false ||
+                    (minimumOrder > 0 &&
+                      subtotal < minimumOrder)
+                  }
+                  className="rounded-xl bg-[#d4af37] px-5 py-4 font-black text-black transition hover:bg-[#efd46b] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  إرسال الطلب إلى واتساب
+                  {settingsLoading
+                    ? "جاري تحميل الإعدادات..."
+                    : "إرسال الطلب إلى واتساب"}
                 </button>
 
                 <button
