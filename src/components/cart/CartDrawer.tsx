@@ -1,7 +1,7 @@
 "use client";
 
 import { ShoppingBag, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useCart } from "../../context/cart-context";
 import CartItem from "./CartItem";
@@ -17,12 +17,27 @@ type PlatformSettings = {
   orders_paused_message?: string;
 };
 
+type CreateOrderResponse = {
+  success?: boolean;
+  order?: {
+    id: string;
+    status: string;
+    created_at: string;
+  };
+  error?: string;
+  details?: string;
+};
+
 const DEFAULT_WHATSAPP_NUMBER = "9647722032536";
 const DEFAULT_RESTAURANT_NAME = "مطبخ زاد";
 const DEFAULT_SLOGAN = "زاد... نكهة تستحق العودة";
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat("ar-US").format(price);
+}
+
+function createOrderReference(orderId: string) {
+  return orderId.replace(/-/g, "").slice(0, 8).toUpperCase();
 }
 
 export default function CartDrawer() {
@@ -39,6 +54,9 @@ export default function CartDrawer() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [orderNote, setOrderNote] = useState("");
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submissionLockRef = useRef(false);
 
   const [settings, setSettings] = useState<PlatformSettings>({
     restaurant_name: DEFAULT_RESTAURANT_NAME,
@@ -67,7 +85,7 @@ export default function CartDrawer() {
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !isSubmitting) {
         closeCart();
       }
     };
@@ -77,7 +95,7 @@ export default function CartDrawer() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [closeCart]);
+  }, [closeCart, isSubmitting]);
 
   useEffect(() => {
     let isMounted = true;
@@ -122,8 +140,7 @@ export default function CartDrawer() {
   const restaurantName =
     settings.restaurant_name?.trim() || DEFAULT_RESTAURANT_NAME;
 
-  const slogan =
-    settings.slogan?.trim() || DEFAULT_SLOGAN;
+  const slogan = settings.slogan?.trim() || DEFAULT_SLOGAN;
 
   const whatsappNumber =
     settings.whatsapp_number?.replace(/[^\d]/g, "") ||
@@ -134,7 +151,7 @@ export default function CartDrawer() {
     Number(settings.minimum_order ?? 0)
   );
 
-  const createWhatsAppMessage = () => {
+  const createWhatsAppMessage = (orderReference: string) => {
     const orderItems = items
       .map((item, index) => {
         const itemTotal = item.price * item.quantity;
@@ -155,6 +172,8 @@ export default function CartDrawer() {
     return [
       `السلام عليكم، أريد تأكيد طلب من ${restaurantName}:`,
       "",
+      "رقم الطلب: #" + orderReference,
+      "",
       orderItems,
       "",
       "━━━━━━━━━━━━",
@@ -162,19 +181,26 @@ export default function CartDrawer() {
       "المجموع الكلي: " + formatPrice(subtotal) + " د.ع",
       "━━━━━━━━━━━━",
       "",
-      "الاسم: " + (customerName || "غير مذكور"),
-      "رقم الهاتف: " + (customerPhone || "غير مذكور"),
-      "العنوان: " + (customerAddress || "غير مذكور"),
-      orderNote
-        ? "ملاحظات الطلب: " + orderNote
+      "الاسم: " + customerName.trim(),
+      "رقم الهاتف: " + customerPhone.trim(),
+      "العنوان: " + customerAddress.trim(),
+      orderNote.trim()
+        ? "ملاحظات الطلب: " + orderNote.trim()
         : "ملاحظات الطلب: لا توجد",
       "",
       slogan,
     ].join("\n");
   };
 
-  const handleCheckout = () => {
-    if (items.length === 0) return;
+  const handleCheckout = async () => {
+    if (submissionLockRef.current || isSubmitting) {
+      return;
+    }
+
+    if (items.length === 0) {
+      alert("السلة فارغة");
+      return;
+    }
 
     if (settingsLoading) {
       alert("يرجى الانتظار لحين تحميل إعدادات المنصة");
@@ -226,25 +252,102 @@ export default function CartDrawer() {
       return;
     }
 
-    const message = createWhatsAppMessage();
+    submissionLockRef.current = true;
+    setIsSubmitting(true);
 
-    const whatsappUrl =
-      "https://wa.me/" +
-      whatsappNumber +
-      "?text=" +
-      encodeURIComponent(message);
-
-    window.open(
-      whatsappUrl,
-      "_blank",
-      "noopener,noreferrer"
+    const whatsappWindow = window.open(
+      "about:blank",
+      "_blank"
     );
+
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customer_name: customerName.trim(),
+          customer_phone: customerPhone.trim(),
+          customer_address: customerAddress.trim(),
+          customer_note: orderNote.trim(),
+
+          subtotal,
+          delivery_fee: 0,
+          total: subtotal,
+
+          whatsapp_number: whatsappNumber,
+
+          items: items.map((item) => ({
+            id: String(item.id),
+            name: item.name,
+            price: item.price,
+            quantity: item.quantity,
+            size: item.size || null,
+            note: item.note || null,
+          })),
+        }),
+      });
+
+      const result =
+        (await response.json()) as CreateOrderResponse;
+
+      if (!response.ok || !result.success || !result.order) {
+        throw new Error(
+          result.error ||
+            result.details ||
+            "تعذر حفظ الطلب في قاعدة البيانات"
+        );
+      }
+
+      const orderReference = createOrderReference(
+        result.order.id
+      );
+
+      const message =
+        createWhatsAppMessage(orderReference);
+
+      const whatsappUrl =
+        "https://wa.me/" +
+        whatsappNumber +
+        "?text=" +
+        encodeURIComponent(message);
+
+      if (whatsappWindow) {
+        whatsappWindow.location.href = whatsappUrl;
+      } else {
+        window.location.href = whatsappUrl;
+      }
+    } catch (error) {
+      if (whatsappWindow) {
+        whatsappWindow.close();
+      }
+
+      console.error("Checkout error:", error);
+
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "حدث خطأ أثناء حفظ الطلب";
+
+      alert(
+        errorMessage +
+          "\n\nلم يتم فتح واتساب، يرجى المحاولة مرة أخرى."
+      );
+    } finally {
+      submissionLockRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <>
       <div
-        onClick={closeCart}
+        onClick={() => {
+          if (!isSubmitting) {
+            closeCart();
+          }
+        }}
         aria-hidden="true"
         className={`fixed inset-0 z-50 bg-black/75 backdrop-blur-sm transition-opacity duration-300 ${
           isCartOpen
@@ -278,8 +381,9 @@ export default function CartDrawer() {
           <button
             type="button"
             onClick={closeCart}
+            disabled={isSubmitting}
             aria-label="إغلاق السلة"
-            className="rounded-full border border-white/10 bg-white/5 p-2.5 text-white transition hover:border-[#d4af37]/50 hover:text-[#d4af37]"
+            className="rounded-full border border-white/10 bg-white/5 p-2.5 text-white transition hover:border-[#d4af37]/50 hover:text-[#d4af37] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <X size={23} />
           </button>
@@ -324,41 +428,45 @@ export default function CartDrawer() {
                   <input
                     type="text"
                     value={customerName}
+                    disabled={isSubmitting}
                     onChange={(event) =>
                       setCustomerName(event.target.value)
                     }
                     placeholder="اسم الزبون"
-                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <input
                     type="tel"
                     value={customerPhone}
+                    disabled={isSubmitting}
                     onChange={(event) =>
                       setCustomerPhone(event.target.value)
                     }
                     placeholder="رقم الهاتف"
-                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <textarea
                     rows={3}
                     value={customerAddress}
+                    disabled={isSubmitting}
                     onChange={(event) =>
                       setCustomerAddress(event.target.value)
                     }
                     placeholder="عنوان التوصيل"
-                    className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+                    className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <textarea
                     rows={3}
                     value={orderNote}
+                    disabled={isSubmitting}
                     onChange={(event) =>
                       setOrderNote(event.target.value)
                     }
                     placeholder="ملاحظات إضافية"
-                    className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+                    className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
               </section>
@@ -402,6 +510,7 @@ export default function CartDrawer() {
                   type="button"
                   onClick={handleCheckout}
                   disabled={
+                    isSubmitting ||
                     settingsLoading ||
                     settings.kitchen_open === false ||
                     settings.accepting_orders === false ||
@@ -410,7 +519,9 @@ export default function CartDrawer() {
                   }
                   className="rounded-xl bg-[#d4af37] px-5 py-4 font-black text-black transition hover:bg-[#efd46b] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {settingsLoading
+                  {isSubmitting
+                    ? "جاري حفظ الطلب..."
+                    : settingsLoading
                     ? "جاري تحميل الإعدادات..."
                     : "إرسال الطلب إلى واتساب"}
                 </button>
@@ -418,7 +529,8 @@ export default function CartDrawer() {
                 <button
                   type="button"
                   onClick={clearCart}
-                  className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-4 font-bold text-red-400 transition hover:bg-red-500/20"
+                  disabled={isSubmitting}
+                  className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-4 font-bold text-red-400 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   تفريغ
                 </button>

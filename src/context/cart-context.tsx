@@ -9,7 +9,7 @@ import {
   ReactNode,
 } from "react";
 
-import type { CartItem, CartProduct } from "@/types/cart";
+import type { CartItem, CartProduct } from "../types/cart";
 
 type CartContextType = {
   items: CartItem[];

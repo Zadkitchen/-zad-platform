@@ -209,4 +209,4 @@ export const eveningProducts: EveningProduct[] = [
     category: "البيتزا",
     size: "40 سم",
   },
-]
+];
