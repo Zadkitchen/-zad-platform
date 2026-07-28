@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { createAdminClient } from "../../../lib/supabase/admin";
+import { sendNewOrderNotification } from "../../../lib/telegram";
 
 type OrderItem = {
   id: string;
@@ -183,6 +184,26 @@ export async function POST(request: Request) {
         {
           status: 500,
         }
+      );
+    }
+
+    // إرسال إشعار إلى تيليجرام
+    try {
+      await sendNewOrderNotification({
+        id: data.id,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        customer_address: customerAddress,
+        customer_note: customerNote,
+        subtotal,
+        delivery_fee: deliveryFee,
+        total,
+        items,
+      });
+    } catch (telegramError) {
+      console.error(
+        "Telegram notification error:",
+        telegramError
       );
     }
 
