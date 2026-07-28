@@ -3,13 +3,6 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "../../../lib/supabase/admin";
 import { sendNewOrderNotification } from "../../../lib/telegram";
 
-const KITCHEN_LATITUDE = 30.4745625;
-const KITCHEN_LONGITUDE = 47.8055625;
-
-const DELIVERY_STEP_KM = 5;
-const DELIVERY_STEP_PRICE = 1000;
-const MAX_DELIVERY_DISTANCE_KM = 20;
-
 type OrderItem = {
   id: string;
   name: string;
@@ -33,6 +26,32 @@ type CreateOrderBody = {
   items?: OrderItem[];
 };
 
+type DeliverySettings = {
+  delivery_enabled: boolean;
+  kitchen_latitude: number;
+  kitchen_longitude: number;
+  delivery_base_distance_km: number;
+  delivery_base_fee: number;
+  delivery_step_distance_km: number;
+  delivery_step_fee: number;
+  delivery_max_distance_km: number;
+  minimum_order: number;
+  free_delivery_threshold: number;
+};
+
+const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = {
+  delivery_enabled: true,
+  kitchen_latitude: 30.4745,
+  kitchen_longitude: 47.805556,
+  delivery_base_distance_km: 5,
+  delivery_base_fee: 1000,
+  delivery_step_distance_km: 5,
+  delivery_step_fee: 1000,
+  delivery_max_distance_km: 20,
+  minimum_order: 0,
+  free_delivery_threshold: 0,
+};
+
 function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -45,6 +64,19 @@ function cleanNumber(value: unknown) {
   }
 
   return Math.round(number);
+}
+
+function cleanDecimal(
+  value: unknown,
+  fallback: number
+) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return number;
 }
 
 function toRadians(value: number) {
@@ -86,13 +118,121 @@ function calculateDistanceKm(
   );
 }
 
-function calculateDeliveryFee(distanceKm: number) {
-  const deliverySteps = Math.max(
-    1,
-    Math.ceil(distanceKm / DELIVERY_STEP_KM)
+function calculateDeliveryFee(
+  distanceKm: number,
+  settings: DeliverySettings
+) {
+  if (
+    distanceKm <=
+    settings.delivery_base_distance_km
+  ) {
+    return settings.delivery_base_fee;
+  }
+
+  const extraDistance =
+    distanceKm -
+    settings.delivery_base_distance_km;
+
+  const extraSteps = Math.ceil(
+    extraDistance /
+      settings.delivery_step_distance_km
   );
 
-  return deliverySteps * DELIVERY_STEP_PRICE;
+  return (
+    settings.delivery_base_fee +
+    extraSteps * settings.delivery_step_fee
+  );
+}
+
+async function getDeliverySettings() {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from("platform_settings")
+    .select(
+      `
+        delivery_enabled,
+        kitchen_latitude,
+        kitchen_longitude,
+        delivery_base_distance_km,
+        delivery_base_fee,
+        delivery_step_distance_km,
+        delivery_step_fee,
+        delivery_max_distance_km,
+        minimum_order,
+        free_delivery_threshold
+      `
+    )
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      "Delivery settings fetch error:",
+      error
+    );
+
+    return DEFAULT_DELIVERY_SETTINGS;
+  }
+
+  if (!data) {
+    return DEFAULT_DELIVERY_SETTINGS;
+  }
+
+  return {
+    delivery_enabled:
+      data.delivery_enabled !== false,
+
+    kitchen_latitude: cleanDecimal(
+      data.kitchen_latitude,
+      DEFAULT_DELIVERY_SETTINGS.kitchen_latitude
+    ),
+
+    kitchen_longitude: cleanDecimal(
+      data.kitchen_longitude,
+      DEFAULT_DELIVERY_SETTINGS.kitchen_longitude
+    ),
+
+    delivery_base_distance_km: Math.max(
+      0.1,
+      cleanDecimal(
+        data.delivery_base_distance_km,
+        DEFAULT_DELIVERY_SETTINGS.delivery_base_distance_km
+      )
+    ),
+
+    delivery_base_fee: cleanNumber(
+      data.delivery_base_fee
+    ),
+
+    delivery_step_distance_km: Math.max(
+      0.1,
+      cleanDecimal(
+        data.delivery_step_distance_km,
+        DEFAULT_DELIVERY_SETTINGS.delivery_step_distance_km
+      )
+    ),
+
+    delivery_step_fee: cleanNumber(
+      data.delivery_step_fee
+    ),
+
+    delivery_max_distance_km: Math.max(
+      0.1,
+      cleanDecimal(
+        data.delivery_max_distance_km,
+        DEFAULT_DELIVERY_SETTINGS.delivery_max_distance_km
+      )
+    ),
+
+    minimum_order: cleanNumber(
+      data.minimum_order
+    ),
+
+    free_delivery_threshold: cleanNumber(
+      data.free_delivery_threshold
+    ),
+  } satisfies DeliverySettings;
 }
 
 export async function POST(request: Request) {
@@ -185,6 +325,21 @@ export async function POST(request: Request) {
       );
     }
 
+    if (
+      customerLatitude < -90 ||
+      customerLatitude > 90 ||
+      customerLongitude < -180 ||
+      customerLongitude > 180
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "إحداثيات موقع التوصيل غير صحيحة.",
+        },
+        { status: 400 }
+      );
+    }
+
     if (items.length === 0) {
       return NextResponse.json(
         { error: "لا توجد أصناف داخل الطلب." },
@@ -199,26 +354,67 @@ export async function POST(request: Request) {
       );
     }
 
-    const distanceKm = calculateDistanceKm(
-      KITCHEN_LATITUDE,
-      KITCHEN_LONGITUDE,
-      customerLatitude,
-      customerLongitude
-    );
+    const settings =
+      await getDeliverySettings();
 
-    if (distanceKm > MAX_DELIVERY_DISTANCE_KM) {
+    if (!settings.delivery_enabled) {
       return NextResponse.json(
         {
-          error: `عذرًا، موقع التوصيل يبعد ${distanceKm.toFixed(
-            1
-          )} كم، والحد الأقصى للتوصيل هو ${MAX_DELIVERY_DISTANCE_KM} كم.`,
+          error:
+            "نعتذر، خدمة التوصيل متوقفة حاليًا.",
         },
         { status: 400 }
       );
     }
 
-    const deliveryFee =
-      calculateDeliveryFee(distanceKm);
+    if (
+      settings.minimum_order > 0 &&
+      subtotal < settings.minimum_order
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            `الحد الأدنى للطلب هو ${settings.minimum_order.toLocaleString(
+              "en-US"
+            )} دينار.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const distanceKm = calculateDistanceKm(
+      settings.kitchen_latitude,
+      settings.kitchen_longitude,
+      customerLatitude,
+      customerLongitude
+    );
+
+    if (
+      distanceKm >
+      settings.delivery_max_distance_km
+    ) {
+      return NextResponse.json(
+        {
+          error: `عذرًا، موقع التوصيل يبعد ${distanceKm.toFixed(
+            1
+          )} كم، والحد الأقصى للتوصيل هو ${settings.delivery_max_distance_km} كم.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    let deliveryFee = calculateDeliveryFee(
+      distanceKm,
+      settings
+    );
+
+    if (
+      settings.free_delivery_threshold > 0 &&
+      subtotal >=
+        settings.free_delivery_threshold
+    ) {
+      deliveryFee = 0;
+    }
 
     const total = subtotal + deliveryFee;
 
