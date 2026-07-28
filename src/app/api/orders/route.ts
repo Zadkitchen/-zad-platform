@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "../../../lib/supabase/admin";
 import { sendNewOrderNotification } from "../../../lib/telegram";
 
+const KITCHEN_LATITUDE = 30.4745625;
+const KITCHEN_LONGITUDE = 47.8055625;
+
+const DELIVERY_STEP_KM = 5;
+const DELIVERY_STEP_PRICE = 1000;
+const MAX_DELIVERY_DISTANCE_KM = 20;
+
 type OrderItem = {
   id: string;
   name: string;
@@ -18,10 +25,10 @@ type CreateOrderBody = {
   customer_address?: string;
   customer_note?: string;
 
-  subtotal?: number;
-  delivery_fee?: number;
-  total?: number;
+  customer_latitude?: number;
+  customer_longitude?: number;
 
+  subtotal?: number;
   whatsapp_number?: string;
   items?: OrderItem[];
 };
@@ -38,6 +45,54 @@ function cleanNumber(value: unknown) {
   }
 
   return Math.round(number);
+}
+
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(
+  latitude1: number,
+  longitude1: number,
+  latitude2: number,
+  longitude2: number
+) {
+  const earthRadiusKm = 6371;
+
+  const latitudeDifference = toRadians(
+    latitude2 - latitude1
+  );
+
+  const longitudeDifference = toRadians(
+    longitude2 - longitude1
+  );
+
+  const startLatitude = toRadians(latitude1);
+  const endLatitude = toRadians(latitude2);
+
+  const haversine =
+    Math.sin(latitudeDifference / 2) ** 2 +
+    Math.cos(startLatitude) *
+      Math.cos(endLatitude) *
+      Math.sin(longitudeDifference / 2) ** 2;
+
+  return (
+    2 *
+    earthRadiusKm *
+    Math.atan2(
+      Math.sqrt(haversine),
+      Math.sqrt(1 - haversine)
+    )
+  );
+}
+
+function calculateDeliveryFee(distanceKm: number) {
+  const deliverySteps = Math.max(
+    1,
+    Math.ceil(distanceKm / DELIVERY_STEP_KM)
+  );
+
+  return deliverySteps * DELIVERY_STEP_PRICE;
 }
 
 export async function POST(request: Request) {
@@ -61,11 +116,15 @@ export async function POST(request: Request) {
       body.customer_note
     );
 
-    const subtotal = cleanNumber(body.subtotal);
-    const deliveryFee = cleanNumber(
-      body.delivery_fee
+    const customerLatitude = Number(
+      body.customer_latitude
     );
-    const total = cleanNumber(body.total);
+
+    const customerLongitude = Number(
+      body.customer_longitude
+    );
+
+    const subtotal = cleanNumber(body.subtotal);
 
     const whatsappNumber = cleanText(
       body.whatsapp_number
@@ -94,58 +153,85 @@ export async function POST(request: Request) {
 
     if (!customerName) {
       return NextResponse.json(
-        {
-          error: "اسم الزبون مطلوب.",
-        },
-        {
-          status: 400,
-        }
+        { error: "اسم الزبون مطلوب." },
+        { status: 400 }
       );
     }
 
     if (!customerPhone) {
       return NextResponse.json(
-        {
-          error: "رقم الهاتف مطلوب.",
-        },
-        {
-          status: 400,
-        }
+        { error: "رقم الهاتف مطلوب." },
+        { status: 400 }
       );
     }
 
     if (!customerAddress) {
       return NextResponse.json(
+        { error: "عنوان التوصيل مطلوب." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      !Number.isFinite(customerLatitude) ||
+      !Number.isFinite(customerLongitude)
+    ) {
+      return NextResponse.json(
         {
-          error: "عنوان التوصيل مطلوب.",
+          error:
+            "يرجى الضغط على زر تحديد موقعي قبل إرسال الطلب.",
         },
-        {
-          status: 400,
-        }
+        { status: 400 }
       );
     }
 
     if (items.length === 0) {
       return NextResponse.json(
-        {
-          error: "لا توجد أصناف داخل الطلب.",
-        },
-        {
-          status: 400,
-        }
+        { error: "لا توجد أصناف داخل الطلب." },
+        { status: 400 }
       );
     }
 
-    if (subtotal <= 0 || total <= 0) {
+    if (subtotal <= 0) {
       return NextResponse.json(
-        {
-          error: "قيمة الطلب غير صحيحة.",
-        },
-        {
-          status: 400,
-        }
+        { error: "قيمة الطلب غير صحيحة." },
+        { status: 400 }
       );
     }
+
+    const distanceKm = calculateDistanceKm(
+      KITCHEN_LATITUDE,
+      KITCHEN_LONGITUDE,
+      customerLatitude,
+      customerLongitude
+    );
+
+    if (distanceKm > MAX_DELIVERY_DISTANCE_KM) {
+      return NextResponse.json(
+        {
+          error: `عذرًا، موقع التوصيل يبعد ${distanceKm.toFixed(
+            1
+          )} كم، والحد الأقصى للتوصيل هو ${MAX_DELIVERY_DISTANCE_KM} كم.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const deliveryFee =
+      calculateDeliveryFee(distanceKm);
+
+    const total = subtotal + deliveryFee;
+
+    const mapsUrl =
+      `https://www.google.com/maps?q=` +
+      `${customerLatitude},${customerLongitude}`;
+
+    const fullAddress =
+      `${customerAddress}\n` +
+      `📍 الموقع: ${mapsUrl}\n` +
+      `📏 المسافة التقريبية: ${distanceKm.toFixed(
+        1
+      )} كم`;
 
     const supabase = createAdminClient();
 
@@ -154,7 +240,7 @@ export async function POST(request: Request) {
       .insert({
         customer_name: customerName,
         customer_phone: customerPhone,
-        customer_address: customerAddress,
+        customer_address: fullAddress,
         customer_note: customerNote,
 
         subtotal,
@@ -167,7 +253,9 @@ export async function POST(request: Request) {
         whatsapp_number: whatsappNumber,
         items,
       })
-      .select("id, status, created_at")
+      .select(
+        "id, status, created_at, delivery_fee, total"
+      )
       .single();
 
     if (error) {
@@ -181,19 +269,16 @@ export async function POST(request: Request) {
           error: "تعذر حفظ الطلب.",
           details: error.message,
         },
-        {
-          status: 500,
-        }
+        { status: 500 }
       );
     }
 
-    // إرسال إشعار إلى تيليجرام
     try {
       await sendNewOrderNotification({
         id: data.id,
         customer_name: customerName,
         customer_phone: customerPhone,
-        customer_address: customerAddress,
+        customer_address: fullAddress,
         customer_note: customerNote,
         subtotal,
         delivery_fee: deliveryFee,
@@ -211,10 +296,18 @@ export async function POST(request: Request) {
       {
         success: true,
         order: data,
+        delivery: {
+          distance_km: Number(
+            distanceKm.toFixed(1)
+          ),
+          delivery_fee: deliveryFee,
+          total,
+          latitude: customerLatitude,
+          longitude: customerLongitude,
+          maps_url: mapsUrl,
+        },
       },
-      {
-        status: 201,
-      }
+      { status: 201 }
     );
   } catch (error) {
     console.error(
@@ -222,20 +315,16 @@ export async function POST(request: Request) {
       error
     );
 
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unknown server error";
-
     return NextResponse.json(
       {
         error:
           "حدث خطأ غير متوقع أثناء إنشاء الطلب.",
-        details: message,
+        details:
+          error instanceof Error
+            ? error.message
+            : "Unknown server error",
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     );
   }
 }
