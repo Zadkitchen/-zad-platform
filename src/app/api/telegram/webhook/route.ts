@@ -230,23 +230,7 @@ export async function POST(request: NextRequest) {
   let callbackQueryId: string | undefined;
 
   try {
-    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    const receivedSecret = request.headers.get(
-      "x-telegram-bot-api-secret-token"
-    );
-
-    if (expectedSecret && receivedSecret !== expectedSecret) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Unauthorized webhook request",
-        },
-        {
-          status: 401,
-        }
-      );
-    }
-
+   
     const update = (await request.json()) as TelegramUpdate;
     const callbackQuery = update.callback_query;
 

@@ -27,6 +27,20 @@ function getNumber(
   return Math.round(value);
 }
 
+function getDecimal(
+  formData: FormData,
+  name: string,
+  fallback = 0
+) {
+  const value = Number(formData.get(name));
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return value;
+}
+
 function normalizeWhatsAppNumber(value: string) {
   return value.replace(/[^\d]/g, "");
 }
@@ -86,8 +100,88 @@ export async function updatePlatformSettings(
     );
   }
 
+  const kitchenLatitude = getDecimal(
+    formData,
+    "kitchen_latitude",
+    30.4745
+  );
+
+  const kitchenLongitude = getDecimal(
+    formData,
+    "kitchen_longitude",
+    47.805556
+  );
+
+  const deliveryBaseDistanceKm = getDecimal(
+    formData,
+    "delivery_base_distance_km",
+    5
+  );
+
+  const deliveryStepDistanceKm = getDecimal(
+    formData,
+    "delivery_step_distance_km",
+    5
+  );
+
+  const deliveryMaxDistanceKm = getDecimal(
+    formData,
+    "delivery_max_distance_km",
+    20
+  );
+
+  if (
+    kitchenLatitude < -90 ||
+    kitchenLatitude > 90
+  ) {
+    redirect(
+      `/admin/settings?error=${encodeURIComponent(
+        "خط عرض المطبخ غير صحيح."
+      )}`
+    );
+  }
+
+  if (
+    kitchenLongitude < -180 ||
+    kitchenLongitude > 180
+  ) {
+    redirect(
+      `/admin/settings?error=${encodeURIComponent(
+        "خط طول المطبخ غير صحيح."
+      )}`
+    );
+  }
+
+  if (deliveryBaseDistanceKm <= 0) {
+    redirect(
+      `/admin/settings?error=${encodeURIComponent(
+        "مسافة الشريحة الأولى يجب أن تكون أكبر من صفر."
+      )}`
+    );
+  }
+
+  if (deliveryStepDistanceKm <= 0) {
+    redirect(
+      `/admin/settings?error=${encodeURIComponent(
+        "مسافة الشريحة الإضافية يجب أن تكون أكبر من صفر."
+      )}`
+    );
+  }
+
+  if (
+    deliveryMaxDistanceKm <
+    deliveryBaseDistanceKm
+  ) {
+    redirect(
+      `/admin/settings?error=${encodeURIComponent(
+        "أقصى مسافة للتوصيل يجب أن تكون أكبر من أو تساوي مسافة الشريحة الأولى."
+      )}`
+    );
+  }
+
   const settings = {
     id: 1,
+
     restaurant_name: restaurantName,
     slogan: getText(formData, "slogan"),
 
@@ -111,6 +205,7 @@ export async function updatePlatformSettings(
       formData,
       "accepting_orders"
     ),
+
     kitchen_open: getBoolean(
       formData,
       "kitchen_open"
@@ -120,49 +215,88 @@ export async function updatePlatformSettings(
       formData,
       "morning_shift_enabled"
     ),
+
     morning_start:
-      getText(formData, "morning_start") || "10:30",
+      getText(formData, "morning_start") ||
+      "10:30",
+
     morning_end:
-      getText(formData, "morning_end") || "15:00",
+      getText(formData, "morning_end") ||
+      "15:00",
 
     evening_shift_enabled: getBoolean(
       formData,
       "evening_shift_enabled"
     ),
-    evening_start:
-      getText(formData, "evening_start") || "16:00",
-    evening_end:
-      getText(formData, "evening_end") || "00:00",
 
-    delivery_inside_area: getNumber(
+    evening_start:
+      getText(formData, "evening_start") ||
+      "16:00",
+
+    evening_end:
+      getText(formData, "evening_end") ||
+      "00:00",
+
+    delivery_enabled: getBoolean(
       formData,
-      "delivery_inside_area"
+      "delivery_enabled"
     ),
-    delivery_outside_area: getNumber(
+
+    kitchen_latitude: kitchenLatitude,
+    kitchen_longitude: kitchenLongitude,
+
+    delivery_base_distance_km:
+      deliveryBaseDistanceKm,
+
+    delivery_base_fee: getNumber(
       formData,
-      "delivery_outside_area"
+      "delivery_base_fee",
+      1000
     ),
+
+    delivery_step_distance_km:
+      deliveryStepDistanceKm,
+
+    delivery_step_fee: getNumber(
+      formData,
+      "delivery_step_fee",
+      1000
+    ),
+
+    delivery_max_distance_km:
+      deliveryMaxDistanceKm,
+
     minimum_order: getNumber(
       formData,
-      "minimum_order"
+      "minimum_order",
+      0
     ),
+
     free_delivery_threshold: getNumber(
       formData,
-      "free_delivery_threshold"
+      "free_delivery_threshold",
+      0
     ),
 
     banner_enabled: getBoolean(
       formData,
       "banner_enabled"
     ),
-    banner_text: getText(formData, "banner_text"),
+
+    banner_text: getText(
+      formData,
+      "banner_text"
+    ),
 
     closed_message:
       getText(formData, "closed_message") ||
       "نعتذر، المطبخ مغلق حالياً.",
 
     orders_paused_message:
-      getText(formData, "orders_paused_message") ||
+      getText(
+        formData,
+        "orders_paused_message"
+      ) ||
       "نعتذر، تم إيقاف استقبال الطلبات مؤقتاً.",
 
     updated_at: new Date().toISOString(),
@@ -176,7 +310,10 @@ export async function updatePlatformSettings(
     });
 
   if (error) {
-    console.error("Settings update error:", error);
+    console.error(
+      "Settings update error:",
+      error
+    );
 
     redirect(
       `/admin/settings?error=${encodeURIComponent(
@@ -190,6 +327,7 @@ export async function updatePlatformSettings(
   revalidatePath("/evening");
   revalidatePath("/admin");
   revalidatePath("/admin/settings");
+  revalidatePath("/api/orders");
 
   redirect(
     `/admin/settings?success=${encodeURIComponent(

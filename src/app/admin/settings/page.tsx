@@ -42,8 +42,14 @@ type PlatformSettings = {
   evening_shift_enabled: boolean;
   evening_start: string;
   evening_end: string;
-  delivery_inside_area: number;
-  delivery_outside_area: number;
+  delivery_enabled: boolean;
+  kitchen_latitude: number;
+  kitchen_longitude: number;
+  delivery_base_distance_km: number;
+  delivery_base_fee: number;
+  delivery_step_distance_km: number;
+  delivery_step_fee: number;
+  delivery_max_distance_km: number;
   minimum_order: number;
   free_delivery_threshold: number;
   banner_enabled: boolean;
@@ -130,10 +136,21 @@ export default async function AdminSettingsPage({
       data?.evening_shift_enabled ?? true,
     evening_start: data?.evening_start ?? "16:00",
     evening_end: data?.evening_end ?? "00:00",
-    delivery_inside_area:
-      data?.delivery_inside_area ?? 1000,
-    delivery_outside_area:
-      data?.delivery_outside_area ?? 2000,
+    delivery_enabled: data?.delivery_enabled ?? true,
+    kitchen_latitude:
+      Number(data?.kitchen_latitude) || 30.4745,
+    kitchen_longitude:
+      Number(data?.kitchen_longitude) || 47.805556,
+    delivery_base_distance_km:
+      Number(data?.delivery_base_distance_km) || 5,
+    delivery_base_fee:
+      Number(data?.delivery_base_fee) || 1000,
+    delivery_step_distance_km:
+      Number(data?.delivery_step_distance_km) || 5,
+    delivery_step_fee:
+      Number(data?.delivery_step_fee) || 1000,
+    delivery_max_distance_km:
+      Number(data?.delivery_max_distance_km) || 20,
     minimum_order: data?.minimum_order ?? 5000,
     free_delivery_threshold:
       data?.free_delivery_threshold ?? 0,
@@ -346,25 +363,60 @@ export default async function AdminSettingsPage({
           <section className={sectionClass}>
             <SectionTitle
               icon={Truck}
-              title="التوصيل والحد الأدنى"
-              description="الأسعار بالدينار العراقي."
+              title="إعدادات التوصيل"
+              description="احتساب أجرة التوصيل تلقائيًا حسب موقع الزبون والمسافة."
             />
 
+            <div className="mt-6">
+              <ToggleCard
+                name="delivery_enabled"
+                title="تفعيل خدمة التوصيل"
+                description="عند الإيقاف لن يتمكن الزبون من إكمال طلب توصيل."
+                defaultChecked={settings.delivery_enabled}
+              />
+            </div>
+
             <div className="mt-6 grid gap-5 sm:grid-cols-2">
-              <NumberField
-                name="delivery_inside_area"
-                label="التوصيل داخل المنطقة"
-                defaultValue={
-                  settings.delivery_inside_area
-                }
+              <DecimalField
+                name="kitchen_latitude"
+                label="خط عرض المطبخ"
+                defaultValue={settings.kitchen_latitude}
+              />
+
+              <DecimalField
+                name="kitchen_longitude"
+                label="خط طول المطبخ"
+                defaultValue={settings.kitchen_longitude}
+              />
+
+              <DistanceField
+                name="delivery_base_distance_km"
+                label="مسافة الشريحة الأولى"
+                defaultValue={settings.delivery_base_distance_km}
               />
 
               <NumberField
-                name="delivery_outside_area"
-                label="التوصيل خارج المنطقة"
-                defaultValue={
-                  settings.delivery_outside_area
-                }
+                name="delivery_base_fee"
+                label="أجرة الشريحة الأولى"
+                defaultValue={settings.delivery_base_fee}
+              />
+
+              <DistanceField
+                name="delivery_step_distance_km"
+                label="مسافة كل شريحة إضافية"
+                defaultValue={settings.delivery_step_distance_km}
+              />
+
+              <NumberField
+                name="delivery_step_fee"
+                label="أجرة كل شريحة إضافية"
+                defaultValue={settings.delivery_step_fee}
+              />
+
+              <DistanceField
+                name="delivery_max_distance_km"
+                label="أقصى مسافة للتوصيل"
+                defaultValue={settings.delivery_max_distance_km}
               />
 
               <NumberField
@@ -376,11 +428,17 @@ export default async function AdminSettingsPage({
               <NumberField
                 name="free_delivery_threshold"
                 label="توصيل مجاني عند بلوغ"
-                defaultValue={
-                  settings.free_delivery_threshold
-                }
+                defaultValue={settings.free_delivery_threshold}
                 helper="اكتب صفر لتعطيل التوصيل المجاني."
               />
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-[#d4af37]/20 bg-[#d4af37]/5 p-4 text-sm leading-7 text-white/55">
+              الإعداد الحالي: أول {settings.delivery_base_distance_km} كم بسعر{" "}
+              {new Intl.NumberFormat("en-US").format(settings.delivery_base_fee)} د.ع،
+              وبعدها كل {settings.delivery_step_distance_km} كم تضاف{" "}
+              {new Intl.NumberFormat("en-US").format(settings.delivery_step_fee)} د.ع،
+              وبحد أقصى {settings.delivery_max_distance_km} كم.
             </div>
           </section>
 
@@ -572,6 +630,61 @@ function NumberField({
           {helper}
         </span>
       )}
+    </Field>
+  );
+}
+
+
+function DecimalField({
+  name,
+  label,
+  defaultValue,
+}: {
+  name: string;
+  label: string;
+  defaultValue: number;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        name={name}
+        type="number"
+        step="0.000001"
+        required
+        defaultValue={defaultValue}
+        className={inputClass}
+        dir="ltr"
+      />
+    </Field>
+  );
+}
+
+function DistanceField({
+  name,
+  label,
+  defaultValue,
+}: {
+  name: string;
+  label: string;
+  defaultValue: number;
+}) {
+  return (
+    <Field label={label}>
+      <div className="relative">
+        <input
+          name={name}
+          type="number"
+          min="0.1"
+          step="0.5"
+          required
+          defaultValue={defaultValue}
+          className={`${inputClass} pl-14`}
+        />
+
+        <span className="absolute bottom-4 left-4 text-xs font-bold text-white/30">
+          كم
+        </span>
+      </div>
     </Field>
   );
 }
