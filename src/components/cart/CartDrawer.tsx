@@ -103,6 +103,7 @@ export default function CartDrawer() {
     async function loadPlatformSettings() {
       try {
         const response = await fetch("/api/platform-settings", {
+          method: "GET",
           cache: "no-store",
         });
 
@@ -138,9 +139,12 @@ export default function CartDrawer() {
   }, []);
 
   const restaurantName =
-    settings.restaurant_name?.trim() || DEFAULT_RESTAURANT_NAME;
+    settings.restaurant_name?.trim() ||
+    DEFAULT_RESTAURANT_NAME;
 
-  const slogan = settings.slogan?.trim() || DEFAULT_SLOGAN;
+  const slogan =
+    settings.slogan?.trim() ||
+    DEFAULT_SLOGAN;
 
   const whatsappNumber =
     settings.whatsapp_number?.replace(/[^\d]/g, "") ||
@@ -151,18 +155,27 @@ export default function CartDrawer() {
     Number(settings.minimum_order ?? 0)
   );
 
-  const createWhatsAppMessage = (orderReference: string) => {
+  function createWhatsAppMessage(
+    orderReference: string
+  ) {
     const orderItems = items
       .map((item, index) => {
-        const itemTotal = item.price * item.quantity;
+        const itemTotal =
+          Number(item.price) * Number(item.quantity);
 
         return [
-          String(index + 1) + "- " + item.name,
-          item.size ? "الحجم: " + item.size : "",
-          "الكمية: " + item.quantity,
-          "السعر: " + formatPrice(item.price) + " د.ع",
-          "مجموع الصنف: " + formatPrice(itemTotal) + " د.ع",
-          item.note ? "ملاحظة الصنف: " + item.note : "",
+          `${index + 1}- ${item.name}`,
+          item.size ? `الحجم: ${item.size}` : "",
+          `الكمية: ${item.quantity}`,
+          `السعر: ${formatPrice(
+            Number(item.price)
+          )} د.ع`,
+          `مجموع الصنف: ${formatPrice(
+            itemTotal
+          )} د.ع`,
+          item.note
+            ? `ملاحظة الصنف: ${item.note}`
+            : "",
         ]
           .filter(Boolean)
           .join("\n");
@@ -172,28 +185,33 @@ export default function CartDrawer() {
     return [
       `السلام عليكم، أريد تأكيد طلب من ${restaurantName}:`,
       "",
-      "رقم الطلب: #" + orderReference,
+      `رقم الطلب: #${orderReference}`,
       "",
       orderItems,
       "",
       "━━━━━━━━━━━━",
-      "عدد القطع: " + totalItems,
-      "المجموع الكلي: " + formatPrice(subtotal) + " د.ع",
+      `عدد القطع: ${totalItems}`,
+      `المجموع الكلي: ${formatPrice(
+        subtotal
+      )} د.ع`,
       "━━━━━━━━━━━━",
       "",
-      "الاسم: " + customerName.trim(),
-      "رقم الهاتف: " + customerPhone.trim(),
-      "العنوان: " + customerAddress.trim(),
+      `الاسم: ${customerName.trim()}`,
+      `رقم الهاتف: ${customerPhone.trim()}`,
+      `العنوان: ${customerAddress.trim()}`,
       orderNote.trim()
-        ? "ملاحظات الطلب: " + orderNote.trim()
+        ? `ملاحظات الطلب: ${orderNote.trim()}`
         : "ملاحظات الطلب: لا توجد",
       "",
       slogan,
     ].join("\n");
-  };
+  }
 
-  const handleCheckout = async () => {
-    if (submissionLockRef.current || isSubmitting) {
+  async function handleCheckout() {
+    if (
+      submissionLockRef.current ||
+      isSubmitting
+    ) {
       return;
     }
 
@@ -203,7 +221,9 @@ export default function CartDrawer() {
     }
 
     if (settingsLoading) {
-      alert("يرجى الانتظار لحين تحميل إعدادات المنصة");
+      alert(
+        "يرجى الانتظار لحين تحميل إعدادات المنصة"
+      );
       return;
     }
 
@@ -223,7 +243,10 @@ export default function CartDrawer() {
       return;
     }
 
-    if (minimumOrder > 0 && subtotal < minimumOrder) {
+    if (
+      minimumOrder > 0 &&
+      subtotal < minimumOrder
+    ) {
       alert(
         `الحد الأدنى للطلب هو ${formatPrice(
           minimumOrder
@@ -248,90 +271,129 @@ export default function CartDrawer() {
     }
 
     if (!whatsappNumber) {
-      alert("رقم الواتساب غير مضبوط في إعدادات المنصة");
+      alert(
+        "رقم الواتساب غير مضبوط في إعدادات المنصة"
+      );
       return;
     }
 
     submissionLockRef.current = true;
     setIsSubmitting(true);
 
-   const whatsappWindow = null;
+    const controller = new AbortController();
+
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 20000);
 
     try {
       const response = await fetch("/api/orders", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
         },
+        cache: "no-store",
+        signal: controller.signal,
         body: JSON.stringify({
           customer_name: customerName.trim(),
           customer_phone: customerPhone.trim(),
-          customer_address: customerAddress.trim(),
+          customer_address:
+            customerAddress.trim(),
           customer_note: orderNote.trim(),
 
-          subtotal,
+          subtotal: Number(subtotal),
           delivery_fee: 0,
-          total: subtotal,
+          total: Number(subtotal),
 
           whatsapp_number: whatsappNumber,
 
           items: items.map((item) => ({
             id: String(item.id),
-            name: item.name,
-            price: item.price,
-            quantity: item.quantity,
-            size: item.size || null,
-            note: item.note || null,
+            name: String(item.name),
+            price: Number(item.price),
+            quantity: Number(item.quantity),
+            size: item.size
+              ? String(item.size)
+              : null,
+            note: item.note
+              ? String(item.note)
+              : null,
           })),
         }),
       });
 
-      const result =
-        (await response.json()) as CreateOrderResponse;
+      const responseText = await response.text();
 
-      if (!response.ok || !result.success || !result.order) {
+      let result: CreateOrderResponse = {};
+
+      if (responseText) {
+        try {
+          result = JSON.parse(
+            responseText
+          ) as CreateOrderResponse;
+        } catch {
+          throw new Error(
+            "الخادم أعاد استجابة غير صحيحة."
+          );
+        }
+      }
+
+      if (!response.ok) {
         throw new Error(
-          result.error ||
-            result.details ||
-            "تعذر حفظ الطلب في قاعدة البيانات"
+          result.details ||
+            result.error ||
+            `تعذر حفظ الطلب. رمز الخطأ: ${response.status}`
         );
       }
 
-      const orderReference = createOrderReference(
-        result.order.id
-      );
+      if (
+        !result.success ||
+        !result.order?.id
+      ) {
+        throw new Error(
+          result.details ||
+            result.error ||
+            "تم الاتصال بالخادم، لكن لم يرجع رقم الطلب."
+        );
+      }
+
+      const orderReference =
+        createOrderReference(result.order.id);
 
       const message =
         createWhatsAppMessage(orderReference);
 
       const whatsappUrl =
-        "https://wa.me/" +
-        whatsappNumber +
-        "?text=" +
-        encodeURIComponent(message);
+        `https://wa.me/${whatsappNumber}` +
+        `?text=${encodeURIComponent(message)}`;
 
-     window.location.href = whatsappUrl;
+      window.location.href = whatsappUrl;
     } catch (error) {
-      if (whatsappWindow) {
-        whatsappWindow.close();
-      }
-
       console.error("Checkout error:", error);
 
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "حدث خطأ أثناء حفظ الطلب";
+      let errorMessage =
+        "حدث خطأ أثناء حفظ الطلب.";
+
+      if (
+        error instanceof DOMException &&
+        error.name === "AbortError"
+      ) {
+        errorMessage =
+          "انتهت مهلة إرسال الطلب. تأكد من الإنترنت وحاول مرة أخرى.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
 
       alert(
-        errorMessage +
-          "\n\nلم يتم فتح واتساب، يرجى المحاولة مرة أخرى."
+        `${errorMessage}\n\nلم يتم إرسال الطلب إلى واتساب.`
       );
     } finally {
+      window.clearTimeout(timeoutId);
       submissionLockRef.current = false;
       setIsSubmitting(false);
     }
-  };
+  }
 
   return (
     <>
@@ -393,8 +455,8 @@ export default function CartDrawer() {
             </h3>
 
             <p className="mt-2 max-w-xs leading-7 text-neutral-400">
-              اختر وجبتك المفضلة من منيو زاد واضغط على زر
-              أضف للسلة.
+              اختر وجبتك المفضلة من منيو زاد واضغط
+              على زر أضف للسلة.
             </p>
 
             <button
@@ -409,7 +471,10 @@ export default function CartDrawer() {
           <>
             <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
               {items.map((item) => (
-                <CartItem key={item.id} item={item} />
+                <CartItem
+                  key={item.id}
+                  item={item}
+                />
               ))}
 
               <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
@@ -423,9 +488,12 @@ export default function CartDrawer() {
                     value={customerName}
                     disabled={isSubmitting}
                     onChange={(event) =>
-                      setCustomerName(event.target.value)
+                      setCustomerName(
+                        event.target.value
+                      )
                     }
                     placeholder="اسم الزبون"
+                    autoComplete="name"
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
@@ -434,9 +502,13 @@ export default function CartDrawer() {
                     value={customerPhone}
                     disabled={isSubmitting}
                     onChange={(event) =>
-                      setCustomerPhone(event.target.value)
+                      setCustomerPhone(
+                        event.target.value
+                      )
                     }
                     placeholder="رقم الهاتف"
+                    inputMode="tel"
+                    autoComplete="tel"
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
@@ -445,9 +517,12 @@ export default function CartDrawer() {
                     value={customerAddress}
                     disabled={isSubmitting}
                     onChange={(event) =>
-                      setCustomerAddress(event.target.value)
+                      setCustomerAddress(
+                        event.target.value
+                      )
                     }
                     placeholder="عنوان التوصيل"
+                    autoComplete="street-address"
                     className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
@@ -456,7 +531,9 @@ export default function CartDrawer() {
                     value={orderNote}
                     disabled={isSubmitting}
                     onChange={(event) =>
-                      setOrderNote(event.target.value)
+                      setOrderNote(
+                        event.target.value
+                      )
                     }
                     placeholder="ملاحظات إضافية"
                     className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none disabled:cursor-not-allowed disabled:opacity-60"
@@ -466,14 +543,16 @@ export default function CartDrawer() {
             </div>
 
             <footer className="border-t border-white/10 bg-[#0d0d0d] px-5 py-5">
-              {minimumOrder > 0 && subtotal < minimumOrder && (
-                <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-300">
-                  الحد الأدنى للطلب هو{" "}
-                  {formatPrice(minimumOrder)} د.ع
-                </div>
-              )}
+              {minimumOrder > 0 &&
+                subtotal < minimumOrder && (
+                  <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm font-bold text-amber-300">
+                    الحد الأدنى للطلب هو{" "}
+                    {formatPrice(minimumOrder)} د.ع
+                  </div>
+                )}
 
-              {settings.kitchen_open === false && (
+              {settings.kitchen_open ===
+                false && (
                 <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-300">
                   {settings.closed_message ||
                     "نعتذر، المطبخ مغلق حالياً."}
@@ -481,7 +560,8 @@ export default function CartDrawer() {
               )}
 
               {settings.kitchen_open !== false &&
-                settings.accepting_orders === false && (
+                settings.accepting_orders ===
+                  false && (
                   <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-bold text-red-300">
                     {settings.orders_paused_message ||
                       "نعتذر، تم إيقاف استقبال الطلبات مؤقتاً."}
@@ -505,8 +585,10 @@ export default function CartDrawer() {
                   disabled={
                     isSubmitting ||
                     settingsLoading ||
-                    settings.kitchen_open === false ||
-                    settings.accepting_orders === false ||
+                    settings.kitchen_open ===
+                      false ||
+                    settings.accepting_orders ===
+                      false ||
                     (minimumOrder > 0 &&
                       subtotal < minimumOrder)
                   }
