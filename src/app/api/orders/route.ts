@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { createClient } from "../../../lib/supabase/server";
+import { createAdminClient } from "../../../lib/supabase/admin";
 
 type OrderItem = {
   id: string;
@@ -41,15 +41,29 @@ function cleanNumber(value: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as CreateOrderBody;
+    const body =
+      (await request.json()) as CreateOrderBody;
 
-    const customerName = cleanText(body.customer_name);
-    const customerPhone = cleanText(body.customer_phone);
-    const customerAddress = cleanText(body.customer_address);
-    const customerNote = cleanText(body.customer_note);
+    const customerName = cleanText(
+      body.customer_name
+    );
+
+    const customerPhone = cleanText(
+      body.customer_phone
+    );
+
+    const customerAddress = cleanText(
+      body.customer_address
+    );
+
+    const customerNote = cleanText(
+      body.customer_note
+    );
 
     const subtotal = cleanNumber(body.subtotal);
-    const deliveryFee = cleanNumber(body.delivery_fee);
+    const deliveryFee = cleanNumber(
+      body.delivery_fee
+    );
     const total = cleanNumber(body.total);
 
     const whatsappNumber = cleanText(
@@ -66,14 +80,13 @@ export async function POST(request: Request) {
               1,
               cleanNumber(item.quantity)
             ),
-            size: cleanText(item.size),
-            note: cleanText(item.note),
+            size: cleanText(item.size) || null,
+            note: cleanText(item.note) || null,
           }))
           .filter(
             (item) =>
               item.id &&
               item.name &&
-              item.price >= 0 &&
               item.quantity > 0
           )
       : [];
@@ -133,7 +146,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { data, error } = await supabase
       .from("orders")
@@ -153,17 +166,14 @@ export async function POST(request: Request) {
         whatsapp_number: whatsappNumber,
         items,
       })
-      .select(
-        `
-          id,
-          status,
-          created_at
-        `
-      )
+      .select("id, status, created_at")
       .single();
 
     if (error) {
-      console.error("Order insert error:", error);
+      console.error(
+        "Order insert error:",
+        JSON.stringify(error, null, 2)
+      );
 
       return NextResponse.json(
         {
@@ -186,11 +196,21 @@ export async function POST(request: Request) {
       }
     );
   } catch (error) {
-    console.error("Create order API error:", error);
+    console.error(
+      "Create order API error:",
+      error
+    );
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unknown server error";
 
     return NextResponse.json(
       {
-        error: "حدث خطأ غير متوقع أثناء إنشاء الطلب.",
+        error:
+          "حدث خطأ غير متوقع أثناء إنشاء الطلب.",
+        details: message,
       },
       {
         status: 500,

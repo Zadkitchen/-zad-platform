@@ -255,10 +255,7 @@ export default function CartDrawer() {
     submissionLockRef.current = true;
     setIsSubmitting(true);
 
-    const whatsappWindow = window.open(
-      "about:blank",
-      "_blank"
-    );
+   const whatsappWindow = null;
 
     try {
       const response = await fetch("/api/orders", {
@@ -313,11 +310,7 @@ export default function CartDrawer() {
         "?text=" +
         encodeURIComponent(message);
 
-      if (whatsappWindow) {
-        whatsappWindow.location.href = whatsappUrl;
-      } else {
-        window.location.href = whatsappUrl;
-      }
+     window.location.href = whatsappUrl;
     } catch (error) {
       if (whatsappWindow) {
         whatsappWindow.close();
