@@ -450,8 +450,8 @@ export async function POST(request: Request) {
         items,
       })
       .select(
-  "id, order_number, status, created_at, delivery_fee, total"
-)
+        "id, order_number, status, created_at, delivery_fee, total"
+      )
       .single();
 
     if (error) {
@@ -472,6 +472,7 @@ export async function POST(request: Request) {
     try {
       await sendNewOrderNotification({
         id: data.id,
+        order_number: Number(data.order_number),
         customer_name: customerName,
         customer_phone: customerPhone,
         customer_address: fullAddress,
