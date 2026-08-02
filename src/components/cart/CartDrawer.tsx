@@ -19,6 +19,7 @@ type PlatformSettings = {
   accepting_orders?: boolean;
   kitchen_open?: boolean;
   minimum_order?: number;
+  free_delivery_threshold?: number;
 
   closed_message?: string;
   orders_paused_message?: string;
@@ -231,6 +232,7 @@ export default function CartDrawer() {
       accepting_orders: true,
       kitchen_open: true,
       minimum_order: 0,
+      free_delivery_threshold: 0,
 
       closed_message:
         "نعتذر، المطبخ مغلق حالياً.",
@@ -429,8 +431,21 @@ export default function CartDrawer() {
     )
   );
 
+  const freeDeliveryThreshold = Math.max(
+    0,
+    Number(settings.free_delivery_threshold ?? 0)
+  );
+
+  const hasFreeDelivery =
+    freeDeliveryThreshold > 0 &&
+    Number(subtotal) >= freeDeliveryThreshold;
+
+  const finalDeliveryFee = hasFreeDelivery
+    ? 0
+    : Number(deliveryFee);
+
   const totalAmount =
-    Number(subtotal) + Number(deliveryFee);
+    Number(subtotal) + finalDeliveryFee;
 
   const customerMapsUrl =
     customerLocation
@@ -627,9 +642,11 @@ export default function CartDrawer() {
       `مجموع الوجبات: ${formatPrice(
         subtotal
       )} د.ع`,
-      `أجرة التوصيل: ${formatPrice(
-        deliveryFee
-      )} د.ع`,
+      hasFreeDelivery
+        ? `أجرة التوصيل: مجاني`
+        : `أجرة التوصيل: ${formatPrice(
+            finalDeliveryFee
+          )} د.ع`,
       `الإجمالي النهائي: ${formatPrice(
         totalAmount
       )} د.ع`,
@@ -823,7 +840,7 @@ export default function CartDrawer() {
             subtotal: Number(subtotal),
 
             delivery_fee:
-              Number(deliveryFee),
+              Number(finalDeliveryFee),
 
             total: Number(totalAmount),
 
@@ -1133,10 +1150,11 @@ export default function CartDrawer() {
                             </span>
 
                             <span className="font-bold text-emerald-300">
-                              {formatPrice(
-                                deliveryFee
-                              )}{" "}
-                              د.ع
+                              {hasFreeDelivery
+                                ? "مجاني 🎉"
+                                : `${formatPrice(
+                                    finalDeliveryFee
+                                  )} د.ع`}
                             </span>
                           </div>
 
@@ -1245,14 +1263,42 @@ export default function CartDrawer() {
                     أجرة التوصيل
                   </span>
 
-                  <span className="font-bold text-white">
-                    {locationConfirmed
-                      ? `${formatPrice(
-                          deliveryFee
-                        )} د.ع`
-                      : "حدد موقعك"}
+                  <span
+                    className={`font-bold ${
+                      hasFreeDelivery
+                        ? "text-emerald-300"
+                        : "text-white"
+                    }`}
+                  >
+                    {!locationConfirmed
+                      ? "حدد موقعك"
+                      : hasFreeDelivery
+                      ? "مجاني 🎉"
+                      : `${formatPrice(
+                          finalDeliveryFee
+                        )} د.ع`}
                   </span>
                 </div>
+
+                {freeDeliveryThreshold > 0 && (
+                  <div
+                    className={`rounded-xl px-3 py-2 text-center text-xs font-bold ${
+                      hasFreeDelivery
+                        ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                        : "border border-[#d4af37]/15 bg-[#d4af37]/5 text-white/50"
+                    }`}
+                  >
+                    {hasFreeDelivery
+                      ? "🎉 حصلت على توصيل مجاني"
+                      : `أضف ${formatPrice(
+                          Math.max(
+                            0,
+                            freeDeliveryThreshold -
+                              Number(subtotal)
+                          )
+                        )} د.ع لتحصل على توصيل مجاني`}
+                  </div>
+                )}
 
                 <div className="border-t border-white/10 pt-3">
                   <div className="flex items-center justify-between">
