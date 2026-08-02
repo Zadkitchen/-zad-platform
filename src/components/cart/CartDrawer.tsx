@@ -41,10 +41,11 @@ type CreateOrderResponse = {
   success?: boolean;
 
   order?: {
-    id: string;
-    status: string;
-    created_at: string;
-  };
+  id: string;
+  order_number: number;
+  status: string;
+  created_at: string;
+}
 
   error?: string;
   details?: string;
@@ -905,9 +906,9 @@ export default function CartDrawer() {
       }
 
       const orderReference =
-        createOrderReference(
-          result.order.id
-        );
+  String(result.order.order_number
+
+  );
 
       const message =
         createWhatsAppMessage(

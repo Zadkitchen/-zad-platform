@@ -450,8 +450,8 @@ export async function POST(request: Request) {
         items,
       })
       .select(
-        "id, status, created_at, delivery_fee, total"
-      )
+  "id, order_number, status, created_at, delivery_fee, total"
+)
       .single();
 
     if (error) {
