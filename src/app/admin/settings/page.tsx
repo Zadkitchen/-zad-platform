@@ -634,7 +634,6 @@ function NumberField({
   );
 }
 
-
 function DecimalField({
   name,
   label,
@@ -650,6 +649,7 @@ function DecimalField({
         name={name}
         type="number"
         step="0.000001"
+        inputMode="decimal"
         required
         defaultValue={defaultValue}
         className={inputClass}
@@ -658,7 +658,6 @@ function DecimalField({
     </Field>
   );
 }
-
 function DistanceField({
   name,
   label,
@@ -674,11 +673,13 @@ function DistanceField({
         <input
           name={name}
           type="number"
-          min="0.1"
-          step="0.5"
+          min="0"
+          step="0.1"
+          inputMode="decimal"
           required
           defaultValue={defaultValue}
           className={`${inputClass} pl-14`}
+          dir="ltr"
         />
 
         <span className="absolute bottom-4 left-4 text-xs font-bold text-white/30">
