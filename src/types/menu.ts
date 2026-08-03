@@ -15,7 +15,20 @@ export type MenuProduct = {
   name: string;
   description?: string;
   category?: string;
+
+  // السعر الذي يعتمد داخل السلة والطلب
   price: number;
+
+  // بيانات العرض العام
+  originalPrice?: number;
+  offerPrice?: number;
+  offerActive?: boolean;
+  offerName?: string;
+  offerType?: "percentage" | "fixed";
+  offerValue?: number;
+  discountAmount?: number;
+  discountPercentage?: number;
+
   image?: string;
   featured?: boolean;
   available?: boolean;

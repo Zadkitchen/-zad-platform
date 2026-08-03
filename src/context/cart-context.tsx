@@ -2,61 +2,183 @@
 
 import {
   createContext,
+  type ReactNode,
   useContext,
   useEffect,
   useMemo,
   useState,
-  ReactNode,
 } from "react";
 
-import type { CartItem, CartProduct } from "../types/cart";
+import type {
+  CartItem,
+  CartProduct,
+} from "../types/cart";
 
 type CartContextType = {
   items: CartItem[];
-
   isCartOpen: boolean;
-
   openCart: () => void;
-
   closeCart: () => void;
-
   toggleCart: () => void;
-
   addItem: (
     product: CartProduct,
     quantity?: number
   ) => void;
-
-  increaseQuantity: (
-    id: string
-  ) => void;
-
-  decreaseQuantity: (
-    id: string
-  ) => void;
-
-  removeItem: (
-    id: string
-  ) => void;
-
+  increaseQuantity: (id: string) => void;
+  decreaseQuantity: (id: string) => void;
+  removeItem: (id: string) => void;
   clearCart: () => void;
-
   totalItems: number;
-
+  originalSubtotal: number;
+  offerDiscount: number;
   subtotal: number;
 };
 
 const CartContext =
-  createContext<CartContextType | null>(
-    null
-  );
+  createContext<CartContextType | null>(null);
 
-const STORAGE_KEY =
-  "zad-kitchen-cart";
+const STORAGE_KEY = "zad-kitchen-cart";
 
 type CartProviderProps = {
   children: ReactNode;
 };
+
+function cleanPositiveNumber(
+  value: unknown,
+  fallback = 0
+) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number < 0) {
+    return fallback;
+  }
+
+  return number;
+}
+
+function normalizeCartProduct(
+  product: CartProduct
+): CartProduct {
+  const finalPrice = cleanPositiveNumber(
+    product.price
+  );
+
+  const originalPrice = Math.max(
+    finalPrice,
+    cleanPositiveNumber(
+      product.originalPrice,
+      finalPrice
+    )
+  );
+
+  const discountAmount = Math.max(
+    0,
+    originalPrice - finalPrice
+  );
+
+  const offerActive =
+    product.offerActive === true &&
+    discountAmount > 0;
+
+  return {
+    ...product,
+    price: finalPrice,
+    originalPrice,
+    offerActive,
+    discountAmount: offerActive
+      ? discountAmount
+      : 0,
+    discountPercentage:
+      offerActive && originalPrice > 0
+        ? Math.round(
+            (discountAmount / originalPrice) *
+              100
+          )
+        : 0,
+  };
+}
+
+function normalizeStoredCart(
+  value: unknown
+): CartItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalizedItems: CartItem[] = [];
+
+  for (const item of value) {
+    if (
+      !item ||
+      typeof item !== "object"
+    ) {
+      continue;
+    }
+
+    const storedItem =
+      item as Partial<CartItem>;
+
+    const id = String(
+      storedItem.id ?? ""
+    ).trim();
+
+    const name = String(
+      storedItem.name ?? ""
+    ).trim();
+
+    if (!id || !name) {
+      continue;
+    }
+
+    const quantity = Math.max(
+      1,
+      Math.floor(
+        cleanPositiveNumber(
+          storedItem.quantity,
+          1
+        )
+      )
+    );
+
+    const normalizedProduct =
+      normalizeCartProduct({
+        id,
+        name,
+        price: cleanPositiveNumber(
+          storedItem.price
+        ),
+        originalPrice:
+          storedItem.originalPrice,
+        offerActive:
+          storedItem.offerActive,
+        offerName:
+          storedItem.offerName,
+        offerType:
+          storedItem.offerType,
+        offerValue:
+          storedItem.offerValue,
+        discountAmount:
+          storedItem.discountAmount,
+        discountPercentage:
+          storedItem.discountPercentage,
+        image: storedItem.image,
+        category: storedItem.category,
+        size: storedItem.size,
+      });
+
+    normalizedItems.push({
+      ...normalizedProduct,
+      quantity,
+      note:
+        typeof storedItem.note === "string"
+          ? storedItem.note
+          : undefined,
+    });
+  }
+
+  return normalizedItems;
+}
+
 export function CartProvider({
   children,
 }: CartProviderProps) {
@@ -77,12 +199,13 @@ export function CartProvider({
         );
 
       if (savedCart) {
-        const parsedCart =
-          JSON.parse(savedCart);
+        const parsedCart = JSON.parse(
+          savedCart
+        );
 
-        if (Array.isArray(parsedCart)) {
-          setItems(parsedCart);
-        }
+        setItems(
+          normalizeStoredCart(parsedCart)
+        );
       }
     } catch (error) {
       console.error(
@@ -123,8 +246,11 @@ export function CartProvider({
   };
 
   const toggleCart = () => {
-    setIsCartOpen((previous) => !previous);
+    setIsCartOpen(
+      (previous) => !previous
+    );
   };
+
   const addItem = (
     product: CartProduct,
     quantity = 1
@@ -134,17 +260,28 @@ export function CartProvider({
       Math.floor(quantity)
     );
 
+    const normalizedProduct =
+      normalizeCartProduct(product);
+
     setItems((previousItems) => {
       const existingItem =
         previousItems.find(
-          (item) => item.id === product.id
+          (item) =>
+            item.id ===
+              normalizedProduct.id &&
+            item.size ===
+              normalizedProduct.size
         );
 
       if (existingItem) {
         return previousItems.map((item) =>
-          item.id === product.id
+          item.id ===
+            normalizedProduct.id &&
+          item.size ===
+            normalizedProduct.size
             ? {
                 ...item,
+                ...normalizedProduct,
                 quantity:
                   item.quantity +
                   safeQuantity,
@@ -156,7 +293,7 @@ export function CartProvider({
       return [
         ...previousItems,
         {
-          ...product,
+          ...normalizedProduct,
           quantity: safeQuantity,
         },
       ];
@@ -223,15 +360,48 @@ export function CartProvider({
     );
   }, [items]);
 
+  const originalSubtotal = useMemo(() => {
+    return items.reduce(
+      (total, item) => {
+        const originalPrice = Math.max(
+          Number(item.price),
+          Number(
+            item.originalPrice ??
+              item.price
+          )
+        );
+
+        return (
+          total +
+          originalPrice *
+            item.quantity
+        );
+      },
+      0
+    );
+  }, [items]);
+
   const subtotal = useMemo(() => {
     return items.reduce(
       (total, item) =>
         total +
-        item.price * item.quantity,
+        Number(item.price) *
+          item.quantity,
       0
     );
   }, [items]);
-  const value = {
+
+  const offerDiscount = useMemo(() => {
+    return Math.max(
+      0,
+      originalSubtotal - subtotal
+    );
+  }, [
+    originalSubtotal,
+    subtotal,
+  ]);
+
+  const value: CartContextType = {
     items,
     isCartOpen,
     openCart,
@@ -243,6 +413,8 @@ export function CartProvider({
     removeItem,
     clearCart,
     totalItems,
+    originalSubtotal,
+    offerDiscount,
     subtotal,
   };
 
@@ -254,7 +426,9 @@ export function CartProvider({
 }
 
 export function useCart() {
-  const context = useContext(CartContext);
+  const context = useContext(
+    CartContext
+  );
 
   if (!context) {
     throw new Error(

@@ -1,6 +1,12 @@
 "use client";
 
-import { Eye, Heart, Plus, Star } from "lucide-react";
+import {
+  Eye,
+  Flame,
+  Heart,
+  Plus,
+  Star,
+} from "lucide-react";
 import { motion } from "framer-motion";
 import { useState } from "react";
 
@@ -12,16 +18,37 @@ type ProductCardProps = {
 };
 
 function formatPrice(price: number) {
-  return new Intl.NumberFormat("ar-US").format(price);
+  return new Intl.NumberFormat("ar-US").format(
+    Math.round(price)
+  );
 }
 
 export default function ProductCard({
   product,
 }: ProductCardProps) {
   const { addItem } = useCart();
-  const [isFavourite, setIsFavourite] = useState(false);
 
-  const isAvailable = product.available !== false;
+  const [isFavourite, setIsFavourite] =
+    useState(false);
+
+  const isAvailable =
+    product.available !== false;
+
+  const offerActive =
+    product.offerActive === true &&
+    Number(product.originalPrice ?? 0) >
+      Number(product.price);
+
+  const originalPrice = Number(
+    product.originalPrice ?? product.price
+  );
+
+  const finalPrice = Number(product.price);
+
+  const discountPercentage = Math.max(
+    0,
+    Number(product.discountPercentage ?? 0)
+  );
 
   return (
     <motion.article
@@ -69,7 +96,34 @@ export default function ProductCard({
         )}
 
         <div className="absolute inset-x-0 top-0 flex items-start justify-between p-3">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {offerActive && (
+              <motion.span
+                animate={{
+                  scale: [1, 1.05, 1],
+                }}
+                transition={{
+                  duration: 1.8,
+                  repeat: Infinity,
+                }}
+                className="flex items-center gap-1 rounded-full bg-red-600 px-3 py-1 text-xs font-black text-white shadow-lg"
+              >
+                <Flame
+                  size={13}
+                  fill="currentColor"
+                />
+
+                {product.offerName?.trim() ||
+                  "عرض خاص"}
+
+                {discountPercentage > 0 && (
+                  <span>
+                    -{discountPercentage}%
+                  </span>
+                )}
+              </motion.span>
+            )}
+
             {product.featured && (
               <motion.span
                 animate={{
@@ -81,7 +135,10 @@ export default function ProductCard({
                 }}
                 className="flex items-center gap-1 rounded-full bg-[#d4af37] px-3 py-1 text-xs font-black text-black"
               >
-                <Star size={13} fill="currentColor" />
+                <Star
+                  size={13}
+                  fill="currentColor"
+                />
                 الأكثر طلبًا
               </motion.span>
             )}
@@ -97,7 +154,14 @@ export default function ProductCard({
             whileTap={{ scale: 0.85 }}
             whileHover={{ scale: 1.15 }}
             type="button"
-            onClick={() => setIsFavourite(!isFavourite)}
+            onClick={() =>
+              setIsFavourite(!isFavourite)
+            }
+            aria-label={
+              isFavourite
+                ? "إزالة من المفضلة"
+                : "إضافة إلى المفضلة"
+            }
             className={`flex h-10 w-10 items-center justify-center rounded-full backdrop-blur-md transition ${
               isFavourite
                 ? "bg-red-500 text-white"
@@ -106,7 +170,11 @@ export default function ProductCard({
           >
             <Heart
               size={18}
-              fill={isFavourite ? "currentColor" : "none"}
+              fill={
+                isFavourite
+                  ? "currentColor"
+                  : "none"
+              }
             />
           </motion.button>
         </div>
@@ -148,13 +216,34 @@ export default function ProductCard({
             }}
             className="shrink-0 text-left"
           >
-            <p className="text-xl font-black text-[#d4af37]">
-              {formatPrice(product.price)}
+            {offerActive && (
+              <p className="text-sm font-bold text-white/35 line-through decoration-red-500 decoration-2">
+                {formatPrice(originalPrice)} د.ع
+              </p>
+            )}
+
+            <p className="mt-1 text-xl font-black text-[#d4af37]">
+              {formatPrice(finalPrice)}
             </p>
 
             <p className="text-xs text-white/40">
               د.ع
             </p>
+
+            {offerActive &&
+              Number(
+                product.discountAmount ?? 0
+              ) > 0 && (
+                <p className="mt-2 text-xs font-bold text-emerald-300">
+                  وفّرت{" "}
+                  {formatPrice(
+                    Number(
+                      product.discountAmount
+                    )
+                  )}{" "}
+                  د.ع
+                </p>
+              )}
           </motion.div>
         </div>
 
@@ -187,6 +276,7 @@ export default function ProductCard({
               scale: 0.92,
             }}
             type="button"
+            aria-label="عرض تفاصيل الوجبة"
             className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white transition hover:border-[#d4af37]/40 hover:text-[#d4af37]"
           >
             <Eye size={20} />
