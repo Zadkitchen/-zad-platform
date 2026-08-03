@@ -868,7 +868,8 @@ function NumberField({
           name={name}
           type="number"
           min="0"
-          step="250"
+          step="any"
+          inputMode="decimal"
           required
           defaultValue={defaultValue}
           className={`${inputClass} pl-16`}
