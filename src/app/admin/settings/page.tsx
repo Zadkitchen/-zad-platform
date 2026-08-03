@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  BadgePercent,
   Clock3,
   Contact,
   MapPin,
@@ -8,6 +9,7 @@ import {
   Save,
   Settings,
   ShoppingBag,
+  Star,
   Store,
   Truck,
 } from "lucide-react";
@@ -52,6 +54,25 @@ type PlatformSettings = {
   delivery_max_distance_km: number;
   minimum_order: number;
   free_delivery_threshold: number;
+
+  global_offer_enabled: boolean;
+  global_offer_name: string;
+  global_offer_type: "percentage" | "fixed";
+  global_offer_value: number;
+  global_offer_starts_at: string | null;
+  global_offer_ends_at: string | null;
+  global_offer_min_item_price: number;
+  global_offer_exclude_addons: boolean;
+  global_offer_exclude_drinks: boolean;
+
+  loyalty_enabled: boolean;
+  loyalty_required_orders: number;
+  loyalty_discount_type: "percentage" | "fixed";
+  loyalty_discount_value: number;
+  loyalty_max_discount: number;
+  loyalty_min_order_amount: number;
+  loyalty_include_delivery: boolean;
+
   banner_enabled: boolean;
   banner_text: string | null;
   closed_message: string;
@@ -69,6 +90,24 @@ const sectionClass =
 
 function cleanTime(value: string | null | undefined) {
   return value?.slice(0, 5) || "";
+}
+
+function cleanDateTimeLocal(
+  value: string | null | undefined
+) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const localTime = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60000
+  );
+
+  return localTime.toISOString().slice(0, 16);
 }
 
 export default async function AdminSettingsPage({
@@ -154,6 +193,45 @@ export default async function AdminSettingsPage({
     minimum_order: data?.minimum_order ?? 5000,
     free_delivery_threshold:
       data?.free_delivery_threshold ?? 0,
+
+    global_offer_enabled:
+      data?.global_offer_enabled ?? false,
+    global_offer_name:
+      data?.global_offer_name ?? "عرض زاد",
+    global_offer_type:
+      data?.global_offer_type === "fixed"
+        ? "fixed"
+        : "percentage",
+    global_offer_value:
+      Number(data?.global_offer_value) || 0,
+    global_offer_starts_at:
+      data?.global_offer_starts_at ?? null,
+    global_offer_ends_at:
+      data?.global_offer_ends_at ?? null,
+    global_offer_min_item_price:
+      Number(data?.global_offer_min_item_price) || 0,
+    global_offer_exclude_addons:
+      data?.global_offer_exclude_addons ?? true,
+    global_offer_exclude_drinks:
+      data?.global_offer_exclude_drinks ?? true,
+
+    loyalty_enabled:
+      data?.loyalty_enabled ?? false,
+    loyalty_required_orders:
+      Number(data?.loyalty_required_orders) || 5,
+    loyalty_discount_type:
+      data?.loyalty_discount_type === "fixed"
+        ? "fixed"
+        : "percentage",
+    loyalty_discount_value:
+      Number(data?.loyalty_discount_value) || 0,
+    loyalty_max_discount:
+      Number(data?.loyalty_max_discount) || 0,
+    loyalty_min_order_amount:
+      Number(data?.loyalty_min_order_amount) || 0,
+    loyalty_include_delivery:
+      data?.loyalty_include_delivery ?? false,
+
     banner_enabled: data?.banner_enabled ?? false,
     banner_text: data?.banner_text ?? "",
     closed_message:
@@ -439,6 +517,182 @@ export default async function AdminSettingsPage({
               وبعدها كل {settings.delivery_step_distance_km} كم تضاف{" "}
               {new Intl.NumberFormat("en-US").format(settings.delivery_step_fee)} د.ع،
               وبحد أقصى {settings.delivery_max_distance_km} كم.
+            </div>
+          </section>
+
+          <section className={sectionClass}>
+            <SectionTitle
+              icon={BadgePercent}
+              title="العروض العامة"
+              description="فعّل عرضًا واحدًا يطبق تلقائيًا على جميع الوجبات المؤهلة."
+            />
+
+            <div className="mt-6">
+              <ToggleCard
+                name="global_offer_enabled"
+                title="تفعيل العرض العام"
+                description="عند التفعيل يظهر السعر القديم والجديد داخل المنيو ويُعتمد السعر المخفّض في الطلب."
+                defaultChecked={settings.global_offer_enabled}
+              />
+            </div>
+
+            <div className="mt-6 grid gap-5 md:grid-cols-2">
+              <Field label="اسم العرض">
+                <input
+                  name="global_offer_name"
+                  defaultValue={settings.global_offer_name}
+                  placeholder="مثال: عرض الافتتاح"
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="نوع الخصم">
+                <select
+                  name="global_offer_type"
+                  defaultValue={settings.global_offer_type}
+                  className={`${inputClass} bg-[#171717]`}
+                >
+                  <option value="percentage">
+                    نسبة مئوية %
+                  </option>
+                  <option value="fixed">
+                    مبلغ ثابت من كل وجبة
+                  </option>
+                </select>
+              </Field>
+
+              <NumberField
+                name="global_offer_value"
+                label="قيمة الخصم"
+                defaultValue={settings.global_offer_value}
+                helper="إذا اخترت نسبة، اكتب مثلًا 20. وإذا اخترت مبلغًا ثابتًا، اكتب مثلًا 2000."
+              />
+
+              <NumberField
+                name="global_offer_min_item_price"
+                label="أقل سعر وجبة لتطبيق العرض"
+                defaultValue={settings.global_offer_min_item_price}
+                helper="اكتب صفر لتطبيق العرض على كل الأسعار."
+              />
+
+              <Field label="بداية العرض">
+                <input
+                  name="global_offer_starts_at"
+                  type="datetime-local"
+                  defaultValue={cleanDateTimeLocal(
+                    settings.global_offer_starts_at
+                  )}
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field label="نهاية العرض">
+                <input
+                  name="global_offer_ends_at"
+                  type="datetime-local"
+                  defaultValue={cleanDateTimeLocal(
+                    settings.global_offer_ends_at
+                  )}
+                  className={inputClass}
+                />
+              </Field>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <ToggleCard
+                name="global_offer_exclude_addons"
+                title="استثناء الإضافات"
+                description="لا يطبق العرض على تصنيف إضافات."
+                defaultChecked={
+                  settings.global_offer_exclude_addons
+                }
+              />
+
+              <ToggleCard
+                name="global_offer_exclude_drinks"
+                title="استثناء المشروبات"
+                description="لا يطبق العرض على تصنيف مشروبات."
+                defaultChecked={
+                  settings.global_offer_exclude_drinks
+                }
+              />
+            </div>
+          </section>
+
+          <section className={sectionClass}>
+            <SectionTitle
+              icon={Star}
+              title="برنامج الولاء"
+              description="احتساب الطلبات المسلّمة لكل رقم هاتف ومنح خصم تلقائي عند استحقاق المكافأة."
+            />
+
+            <div className="mt-6">
+              <ToggleCard
+                name="loyalty_enabled"
+                title="تفعيل برنامج الولاء"
+                description="يحسب الطلبات التي حالتها تم التسليم فقط."
+                defaultChecked={settings.loyalty_enabled}
+              />
+            </div>
+
+            <div className="mt-6 grid gap-5 md:grid-cols-2">
+              <NumberField
+                name="loyalty_required_orders"
+                label="عدد الطلبات المطلوبة"
+                defaultValue={settings.loyalty_required_orders}
+                helper="مثال: 5 يعني أن الطلب السادس يحصل على الخصم."
+              />
+
+              <Field label="نوع خصم الولاء">
+                <select
+                  name="loyalty_discount_type"
+                  defaultValue={settings.loyalty_discount_type}
+                  className={`${inputClass} bg-[#171717]`}
+                >
+                  <option value="percentage">
+                    نسبة مئوية %
+                  </option>
+                  <option value="fixed">
+                    مبلغ ثابت
+                  </option>
+                </select>
+              </Field>
+
+              <NumberField
+                name="loyalty_discount_value"
+                label="قيمة خصم الولاء"
+                defaultValue={settings.loyalty_discount_value}
+              />
+
+              <NumberField
+                name="loyalty_max_discount"
+                label="الحد الأعلى للخصم"
+                defaultValue={settings.loyalty_max_discount}
+                helper="مهم عند استخدام خصم نسبة. اكتب صفر لإلغاء الحد."
+              />
+
+              <NumberField
+                name="loyalty_min_order_amount"
+                label="أقل قيمة طلب لاستحقاق الخصم"
+                defaultValue={settings.loyalty_min_order_amount}
+              />
+
+              <div className="md:pt-7">
+                <ToggleCard
+                  name="loyalty_include_delivery"
+                  title="خصم الولاء يشمل التوصيل"
+                  description="عند الإيقاف يطبق الخصم على الوجبات فقط."
+                  defaultChecked={
+                    settings.loyalty_include_delivery
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-[#d4af37]/20 bg-[#d4af37]/5 p-4 text-sm leading-7 text-white/55">
+              كل رقم هاتف يكمل{" "}
+              {settings.loyalty_required_orders} طلبات مسلّمة
+              يحصل تلقائيًا على المكافأة في الطلب التالي.
             </div>
           </section>
 

@@ -41,8 +41,35 @@ function getDecimal(
   return value;
 }
 
+function getOptionalDateTime(
+  formData: FormData,
+  name: string
+) {
+  const value = getText(formData, name);
+
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
 function normalizeWhatsAppNumber(value: string) {
   return value.replace(/[^\d]/g, "");
+}
+
+function redirectWithError(message: string): never {
+  redirect(
+    `/admin/settings?error=${encodeURIComponent(
+      message
+    )}`
+  );
 }
 
 async function requireAdmin() {
@@ -85,19 +112,11 @@ export async function updatePlatformSettings(
   );
 
   if (!restaurantName) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "اسم المطبخ مطلوب."
-      )}`
-    );
+    redirectWithError("اسم المطبخ مطلوب.");
   }
 
   if (!whatsappNumber) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "رقم الواتساب مطلوب."
-      )}`
-    );
+    redirectWithError("رقم الواتساب مطلوب.");
   }
 
   const kitchenLatitude = getDecimal(
@@ -134,10 +153,8 @@ export async function updatePlatformSettings(
     kitchenLatitude < -90 ||
     kitchenLatitude > 90
   ) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "خط عرض المطبخ غير صحيح."
-      )}`
+    redirectWithError(
+      "خط عرض المطبخ غير صحيح."
     );
   }
 
@@ -145,26 +162,20 @@ export async function updatePlatformSettings(
     kitchenLongitude < -180 ||
     kitchenLongitude > 180
   ) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "خط طول المطبخ غير صحيح."
-      )}`
+    redirectWithError(
+      "خط طول المطبخ غير صحيح."
     );
   }
 
   if (deliveryBaseDistanceKm <= 0) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "مسافة الشريحة الأولى يجب أن تكون أكبر من صفر."
-      )}`
+    redirectWithError(
+      "مسافة الشريحة الأولى يجب أن تكون أكبر من صفر."
     );
   }
 
   if (deliveryStepDistanceKm <= 0) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "مسافة الشريحة الإضافية يجب أن تكون أكبر من صفر."
-      )}`
+    redirectWithError(
+      "مسافة الشريحة الإضافية يجب أن تكون أكبر من صفر."
     );
   }
 
@@ -172,10 +183,135 @@ export async function updatePlatformSettings(
     deliveryMaxDistanceKm <
     deliveryBaseDistanceKm
   ) {
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        "أقصى مسافة للتوصيل يجب أن تكون أكبر من أو تساوي مسافة الشريحة الأولى."
-      )}`
+    redirectWithError(
+      "أقصى مسافة للتوصيل يجب أن تكون أكبر من أو تساوي مسافة الشريحة الأولى."
+    );
+  }
+
+  const globalOfferEnabled = getBoolean(
+    formData,
+    "global_offer_enabled"
+  );
+
+  const globalOfferName =
+    getText(formData, "global_offer_name") ||
+    "عرض زاد";
+
+  const globalOfferType = getText(
+    formData,
+    "global_offer_type"
+  );
+
+  const globalOfferValue = getNumber(
+    formData,
+    "global_offer_value",
+    0
+  );
+
+  const globalOfferStartsAt =
+    getOptionalDateTime(
+      formData,
+      "global_offer_starts_at"
+    );
+
+  const globalOfferEndsAt =
+    getOptionalDateTime(
+      formData,
+      "global_offer_ends_at"
+    );
+
+  if (
+    !["percentage", "fixed"].includes(
+      globalOfferType
+    )
+  ) {
+    redirectWithError(
+      "نوع الخصم العام غير صحيح."
+    );
+  }
+
+  if (
+    globalOfferEnabled &&
+    globalOfferValue <= 0
+  ) {
+    redirectWithError(
+      "قيمة العرض العام يجب أن تكون أكبر من صفر."
+    );
+  }
+
+  if (
+    globalOfferType === "percentage" &&
+    globalOfferValue > 100
+  ) {
+    redirectWithError(
+      "نسبة الخصم العام لا يمكن أن تتجاوز 100%."
+    );
+  }
+
+  if (
+    globalOfferStartsAt &&
+    globalOfferEndsAt &&
+    new Date(globalOfferEndsAt).getTime() <=
+      new Date(globalOfferStartsAt).getTime()
+  ) {
+    redirectWithError(
+      "نهاية العرض يجب أن تكون بعد بداية العرض."
+    );
+  }
+
+  const loyaltyEnabled = getBoolean(
+    formData,
+    "loyalty_enabled"
+  );
+
+  const loyaltyRequiredOrders = getNumber(
+    formData,
+    "loyalty_required_orders",
+    5
+  );
+
+  const loyaltyDiscountType = getText(
+    formData,
+    "loyalty_discount_type"
+  );
+
+  const loyaltyDiscountValue = getNumber(
+    formData,
+    "loyalty_discount_value",
+    0
+  );
+
+  if (loyaltyRequiredOrders < 1) {
+    redirectWithError(
+      "عدد الطلبات المطلوبة للولاء يجب أن يكون 1 أو أكثر."
+    );
+  }
+
+  if (
+    !["percentage", "fixed"].includes(
+      loyaltyDiscountType
+    )
+  ) {
+    redirectWithError(
+      "نوع خصم الولاء غير صحيح."
+    );
+  }
+
+  if (
+    loyaltyEnabled &&
+    loyaltyDiscountValue <= 0
+  ) {
+    redirectWithError(
+      "قيمة خصم الولاء يجب أن تكون أكبر من صفر."
+    );
+  }
+
+  if (
+    loyaltyDiscountType === "percentage" &&
+    loyaltyDiscountValue > 100
+  ) {
+    redirectWithError(
+      "نسبة خصم الولاء لا يمكن أن تتجاوز 100%."
     );
   }
 
@@ -278,6 +414,75 @@ export async function updatePlatformSettings(
       0
     ),
 
+    global_offer_enabled:
+      globalOfferEnabled,
+
+    global_offer_name:
+      globalOfferName,
+
+    global_offer_type:
+      globalOfferType,
+
+    global_offer_value:
+      globalOfferValue,
+
+    global_offer_starts_at:
+      globalOfferStartsAt,
+
+    global_offer_ends_at:
+      globalOfferEndsAt,
+
+    global_offer_min_item_price:
+      getNumber(
+        formData,
+        "global_offer_min_item_price",
+        0
+      ),
+
+    global_offer_exclude_addons:
+      getBoolean(
+        formData,
+        "global_offer_exclude_addons"
+      ),
+
+    global_offer_exclude_drinks:
+      getBoolean(
+        formData,
+        "global_offer_exclude_drinks"
+      ),
+
+    loyalty_enabled:
+      loyaltyEnabled,
+
+    loyalty_required_orders:
+      loyaltyRequiredOrders,
+
+    loyalty_discount_type:
+      loyaltyDiscountType,
+
+    loyalty_discount_value:
+      loyaltyDiscountValue,
+
+    loyalty_max_discount:
+      getNumber(
+        formData,
+        "loyalty_max_discount",
+        0
+      ),
+
+    loyalty_min_order_amount:
+      getNumber(
+        formData,
+        "loyalty_min_order_amount",
+        0
+      ),
+
+    loyalty_include_delivery:
+      getBoolean(
+        formData,
+        "loyalty_include_delivery"
+      ),
+
     banner_enabled: getBoolean(
       formData,
       "banner_enabled"
@@ -315,10 +520,8 @@ export async function updatePlatformSettings(
       error
     );
 
-    redirect(
-      `/admin/settings?error=${encodeURIComponent(
-        `تعذر حفظ الإعدادات: ${error.message}`
-      )}`
+    redirectWithError(
+      `تعذر حفظ الإعدادات: ${error.message}`
     );
   }
 
@@ -328,10 +531,13 @@ export async function updatePlatformSettings(
   revalidatePath("/admin");
   revalidatePath("/admin/settings");
   revalidatePath("/api/orders");
+  revalidatePath(
+    "/api/platform-settings"
+  );
 
   redirect(
     `/admin/settings?success=${encodeURIComponent(
-      "تم حفظ إعدادات المنصة بنجاح."
+      "تم حفظ إعدادات المنصة والعروض والولاء بنجاح."
     )}`
   );
 }
