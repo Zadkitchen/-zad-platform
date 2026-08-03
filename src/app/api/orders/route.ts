@@ -88,6 +88,14 @@ type PlatformSettingsRow = {
 
   global_offer_exclude_addons: boolean | null;
   global_offer_exclude_drinks: boolean | null;
+
+  loyalty_enabled: boolean | null;
+  loyalty_required_orders: number | null;
+  loyalty_discount_type: string | null;
+  loyalty_discount_value: number | null;
+  loyalty_max_discount: number | null;
+  loyalty_min_order_amount: number | null;
+  loyalty_include_delivery: boolean | null;
 };
 
 type DeliverySettings = {
@@ -108,11 +116,30 @@ type DeliverySettings = {
   free_delivery_threshold: number;
 };
 
+type LoyaltySettings = {
+  enabled: boolean;
+  requiredOrders: number;
+  type: "percentage" | "fixed";
+  value: number;
+  maxDiscount: number;
+  minOrderAmount: number;
+  includeDelivery: boolean;
+};
+
+type LoyaltyResult = {
+  applied: boolean;
+  discount: number;
+  completedOrders: number;
+  requiredOrders: number;
+  remainingOrders: number;
+};
+
 type PricingAndDeliverySettings = {
   delivery: DeliverySettings;
   offer: GlobalOfferSettings;
   excludeAddons: boolean;
   excludeDrinks: boolean;
+  loyalty: LoyaltySettings;
 };
 
 const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = {
@@ -143,6 +170,16 @@ const DEFAULT_OFFER_SETTINGS: GlobalOfferSettings = {
   endsAt: null,
 };
 
+const DEFAULT_LOYALTY_SETTINGS: LoyaltySettings = {
+  enabled: false,
+  requiredOrders: 5,
+  type: "percentage",
+  value: 0,
+  maxDiscount: 0,
+  minOrderAmount: 0,
+  includeDelivery: false,
+};
+
 function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -170,10 +207,32 @@ function cleanDecimal(
   return number;
 }
 
+function normalizePhone(value: unknown) {
+  return cleanText(value).replace(/[^\d]/g, "");
+}
+
 function normalizeCategory(
   value: string | null
 ) {
   return cleanText(value).toLowerCase();
+}
+
+function calculateDiscount(
+  amount: number,
+  type: "percentage" | "fixed",
+  value: number,
+  maxDiscount: number
+) {
+  let discount =
+    type === "percentage"
+      ? Math.round(amount * (value / 100))
+      : value;
+
+  if (maxDiscount > 0) {
+    discount = Math.min(discount, maxDiscount);
+  }
+
+  return Math.max(0, Math.min(discount, amount));
 }
 
 function isExcludedCategory(
@@ -300,7 +359,15 @@ async function getPricingAndDeliverySettings() {
         global_offer_min_item_price,
 
         global_offer_exclude_addons,
-        global_offer_exclude_drinks
+        global_offer_exclude_drinks,
+
+        loyalty_enabled,
+        loyalty_required_orders,
+        loyalty_discount_type,
+        loyalty_discount_value,
+        loyalty_max_discount,
+        loyalty_min_order_amount,
+        loyalty_include_delivery
       `
     )
     .eq("id", 1)
@@ -317,6 +384,7 @@ async function getPricingAndDeliverySettings() {
       offer: DEFAULT_OFFER_SETTINGS,
       excludeAddons: true,
       excludeDrinks: true,
+      loyalty: DEFAULT_LOYALTY_SETTINGS,
     } satisfies PricingAndDeliverySettings;
   }
 
@@ -329,6 +397,7 @@ async function getPricingAndDeliverySettings() {
       offer: DEFAULT_OFFER_SETTINGS,
       excludeAddons: true,
       excludeDrinks: true,
+      loyalty: DEFAULT_LOYALTY_SETTINGS,
     } satisfies PricingAndDeliverySettings;
   }
 
@@ -426,6 +495,45 @@ async function getPricingAndDeliverySettings() {
       settings.global_offer_ends_at ?? null,
   };
 
+  const loyaltyType =
+    settings.loyalty_discount_type === "fixed"
+      ? "fixed"
+      : "percentage";
+
+  const rawLoyaltyValue = cleanNumber(
+    settings.loyalty_discount_value
+  );
+
+  const loyalty: LoyaltySettings = {
+    enabled:
+      settings.loyalty_enabled === true,
+
+    requiredOrders: Math.max(
+      1,
+      cleanNumber(
+        settings.loyalty_required_orders
+      ) || 5
+    ),
+
+    type: loyaltyType,
+
+    value:
+      loyaltyType === "percentage"
+        ? Math.min(100, rawLoyaltyValue)
+        : rawLoyaltyValue,
+
+    maxDiscount: cleanNumber(
+      settings.loyalty_max_discount
+    ),
+
+    minOrderAmount: cleanNumber(
+      settings.loyalty_min_order_amount
+    ),
+
+    includeDelivery:
+      settings.loyalty_include_delivery === true,
+  };
+
   return {
     delivery,
     offer,
@@ -437,6 +545,8 @@ async function getPricingAndDeliverySettings() {
     excludeDrinks:
       settings.global_offer_exclude_drinks !==
       false,
+
+    loyalty,
   } satisfies PricingAndDeliverySettings;
 }
 
@@ -469,6 +579,177 @@ function buildRequestedItems(
     );
 }
 
+async function calculateLoyalty(params: {
+  normalizedPhone: string;
+  subtotal: number;
+  deliveryFee: number;
+  settings: LoyaltySettings;
+}): Promise<LoyaltyResult> {
+  const {
+    normalizedPhone,
+    subtotal,
+    deliveryFee,
+    settings,
+  } = params;
+
+  const emptyResult: LoyaltyResult = {
+    applied: false,
+    discount: 0,
+    completedOrders: 0,
+    requiredOrders: settings.requiredOrders,
+    remainingOrders: settings.requiredOrders,
+  };
+
+  if (
+    !settings.enabled ||
+    !normalizedPhone ||
+    settings.value <= 0 ||
+    subtotal < settings.minOrderAmount
+  ) {
+    return emptyResult;
+  }
+
+  const supabase = createAdminClient();
+
+  const {
+    count: activeRewardCount,
+    error: activeRewardError,
+  } = await supabase
+    .from("orders")
+    .select("*", {
+      count: "exact",
+      head: true,
+    })
+    .eq(
+      "customer_phone_normalized",
+      normalizedPhone
+    )
+    .eq("loyalty_applied", true)
+    .in("status", [
+      "new",
+      "accepted",
+      "preparing",
+      "ready",
+    ]);
+
+  if (activeRewardError) {
+    console.error(
+      "Active loyalty reward lookup error:",
+      activeRewardError
+    );
+
+    return emptyResult;
+  }
+
+  if ((activeRewardCount ?? 0) > 0) {
+    return emptyResult;
+  }
+
+  const {
+    data: lastRewardOrder,
+    error: lastRewardError,
+  } = await supabase
+    .from("orders")
+    .select("created_at")
+    .eq(
+      "customer_phone_normalized",
+      normalizedPhone
+    )
+    .eq("status", "delivered")
+    .eq("loyalty_applied", true)
+    .order("created_at", {
+      ascending: false,
+    })
+    .limit(1)
+    .maybeSingle();
+
+  if (lastRewardError) {
+    console.error(
+      "Last loyalty reward lookup error:",
+      lastRewardError
+    );
+
+    return emptyResult;
+  }
+
+  let completedOrdersQuery = supabase
+    .from("orders")
+    .select("*", {
+      count: "exact",
+      head: true,
+    })
+    .eq(
+      "customer_phone_normalized",
+      normalizedPhone
+    )
+    .eq("status", "delivered")
+    .eq("loyalty_applied", false);
+
+  if (lastRewardOrder?.created_at) {
+    completedOrdersQuery =
+      completedOrdersQuery.gt(
+        "created_at",
+        lastRewardOrder.created_at
+      );
+  }
+
+  const {
+    count: completedOrdersCount,
+    error: completedOrdersError,
+  } = await completedOrdersQuery;
+
+  if (completedOrdersError) {
+    console.error(
+      "Completed loyalty orders lookup error:",
+      completedOrdersError
+    );
+
+    return emptyResult;
+  }
+
+  const completedOrders =
+    completedOrdersCount ?? 0;
+
+  const remainingOrders = Math.max(
+    0,
+    settings.requiredOrders -
+      completedOrders
+  );
+
+  if (
+    completedOrders <
+    settings.requiredOrders
+  ) {
+    return {
+      ...emptyResult,
+      completedOrders,
+      remainingOrders,
+    };
+  }
+
+  const discountBase =
+    subtotal +
+    (settings.includeDelivery
+      ? deliveryFee
+      : 0);
+
+  const discount = calculateDiscount(
+    discountBase,
+    settings.type,
+    settings.value,
+    settings.maxDiscount
+  );
+
+  return {
+    applied: discount > 0,
+    discount,
+    completedOrders,
+    requiredOrders:
+      settings.requiredOrders,
+    remainingOrders: 0,
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const body =
@@ -481,6 +762,9 @@ export async function POST(request: Request) {
     const customerPhone = cleanText(
       body.customer_phone
     );
+
+    const normalizedPhone =
+      normalizePhone(customerPhone);
 
     const customerAddress = cleanText(
       body.customer_address
@@ -498,9 +782,9 @@ export async function POST(request: Request) {
       body.customer_longitude
     );
 
-    const whatsappNumber = cleanText(
+    const whatsappNumber = normalizePhone(
       body.whatsapp_number
-    ).replace(/[^\d]/g, "");
+    );
 
     /*
      * لا نستخدم body.subtotal.
@@ -517,7 +801,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!customerPhone) {
+    if (!normalizedPhone) {
       return NextResponse.json(
         { error: "رقم الهاتف مطلوب." },
         { status: 400 }
@@ -813,19 +1097,27 @@ export async function POST(request: Request) {
       deliveryFee = 0;
     }
 
-    /*
-     * سيُفعّل في مرحلة الولاء.
-     */
-    const loyaltyDiscount = 0;
+    const loyalty =
+      await calculateLoyalty({
+        normalizedPhone,
+        subtotal,
+        deliveryFee,
+        settings: settings.loyalty,
+      });
+
+    const loyaltyDiscount =
+      loyalty.discount;
 
     const totalDiscount =
       globalOfferDiscount +
       loyaltyDiscount;
 
-    const total =
-      subtotal -
-      loyaltyDiscount +
-      deliveryFee;
+    const total = Math.max(
+      0,
+      subtotal +
+        deliveryFee -
+        loyaltyDiscount
+    );
 
     const appliedOfferName =
       pricedItems.find(
@@ -851,6 +1143,9 @@ export async function POST(request: Request) {
           customer_name: customerName,
           customer_phone: customerPhone,
 
+          customer_phone_normalized:
+            normalizedPhone,
+
           customer_address:
             fullAddress,
 
@@ -869,7 +1164,8 @@ export async function POST(request: Request) {
           total_discount:
             totalDiscount,
 
-          loyalty_applied: false,
+          loyalty_applied:
+            loyalty.applied,
 
           applied_offer_name:
             appliedOfferName,
@@ -897,6 +1193,7 @@ export async function POST(request: Request) {
             global_offer_discount,
             loyalty_discount,
             total_discount,
+            loyalty_applied,
 
             subtotal,
             delivery_fee,
@@ -985,6 +1282,26 @@ export async function POST(request: Request) {
 
           applied_offer_name:
             appliedOfferName,
+        },
+
+        loyalty: {
+          enabled:
+            settings.loyalty.enabled,
+
+          applied:
+            loyalty.applied,
+
+          discount:
+            loyaltyDiscount,
+
+          completed_orders:
+            loyalty.completedOrders,
+
+          required_orders:
+            loyalty.requiredOrders,
+
+          remaining_orders:
+            loyalty.remainingOrders,
         },
 
         delivery: {
