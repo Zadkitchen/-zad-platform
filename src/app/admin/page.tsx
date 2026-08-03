@@ -5,6 +5,7 @@ import {
   PackageOpen,
   Settings,
   ShoppingBag,
+  Users,
   Utensils,
 } from "lucide-react";
 import Link from "next/link";
@@ -13,10 +14,11 @@ import { redirect } from "next/navigation";
 import { createClient } from "../../lib/supabase/server";
 import { logout } from "./actions";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminPage() {
   const supabase = await createClient();
 
-  // التأكد من أن المستخدم مسجل دخول
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -25,13 +27,14 @@ export default async function AdminPage() {
     redirect("/admin/login");
   }
 
-  // التأكد من أن المستخدم مدير فعال
-  const { data: admin, error: adminError } =
-    await supabase
-      .from("admin_users")
-      .select("full_name, active")
-      .eq("user_id", user.id)
-      .maybeSingle();
+  const {
+    data: admin,
+    error: adminError,
+  } = await supabase
+    .from("admin_users")
+    .select("full_name, active")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
   if (
     adminError ||
@@ -42,40 +45,75 @@ export default async function AdminPage() {
     redirect("/admin/login");
   }
 
-  // عدد جميع الوجبات
-  const { count: productsCount } =
-    await supabase
+  const [
+    productsResult,
+    availableProductsResult,
+    newOrdersResult,
+    customersResult,
+  ] = await Promise.all([
+    supabase
       .from("products")
       .select("*", {
         count: "exact",
         head: true,
-      });
+      }),
 
-  // عدد الوجبات المتوفرة
-  const { count: availableProductsCount } =
-    await supabase
+    supabase
       .from("products")
       .select("*", {
         count: "exact",
         head: true,
       })
-      .eq("available", true);
+      .eq("available", true),
+
+    supabase
+      .from("orders")
+      .select("*", {
+        count: "exact",
+        head: true,
+      })
+      .eq("status", "new"),
+
+    supabase
+      .from("customer_loyalty_summary")
+      .select("*", {
+        count: "exact",
+        head: true,
+      }),
+  ]);
+
+  const productsCount =
+    productsResult.count ?? 0;
+
+  const availableProductsCount =
+    availableProductsResult.count ?? 0;
+
+  const newOrdersCount =
+    newOrdersResult.count ?? 0;
+
+  const customersCount =
+    customersResult.count ?? 0;
 
   const statistics = [
     {
       title: "إجمالي الوجبات",
-      value: productsCount ?? 0,
+      value: productsCount,
       icon: Utensils,
     },
     {
       title: "الوجبات المتوفرة",
-      value: availableProductsCount ?? 0,
+      value: availableProductsCount,
       icon: ChefHat,
     },
     {
       title: "الطلبات الجديدة",
-      value: 0,
+      value: newOrdersCount,
       icon: ShoppingBag,
+    },
+    {
+      title: "إجمالي العملاء",
+      value: customersCount,
+      icon: Users,
     },
   ];
 
@@ -90,21 +128,28 @@ export default async function AdminPage() {
     {
       title: "الأسعار والعروض",
       description:
-        "تحديث الأسعار وإنشاء عروض للزبائن.",
-      href: "/admin/products",
+        "تشغيل العروض العامة والتحكم بقيمة ونوع الخصم.",
+      href: "/admin/settings",
       icon: CircleDollarSign,
     },
     {
       title: "إدارة الطلبات",
       description:
-        "متابعة الطلبات الجديدة وحالة التحضير.",
+        "متابعة الطلبات الجديدة وحالات التحضير والتوصيل.",
       href: "/admin/orders",
       icon: ShoppingBag,
     },
     {
+      title: "إدارة العملاء",
+      description:
+        "متابعة العملاء والإنفاق وتقدم ومكافآت الولاء.",
+      href: "/admin/customers",
+      icon: Users,
+    },
+    {
       title: "إعدادات المنصة",
       description:
-        "رقم الواتساب وأوقات العمل واستقبال الطلبات.",
+        "أوقات العمل والتوصيل والواتساب والعروض والولاء.",
       href: "/admin/settings",
       icon: Settings,
     },
@@ -128,8 +173,8 @@ export default async function AdminPage() {
               </h1>
 
               <p className="mt-2 text-white/50">
-                من هنا تتحكم بوجبات وأسعار وإعدادات
-                منصة زاد.
+                من هنا تتحكم بوجبات وأسعار وطلبات
+                وعملاء منصة زاد.
               </p>
             </div>
 
@@ -145,7 +190,7 @@ export default async function AdminPage() {
           </div>
         </header>
 
-        <section className="mt-6 grid gap-4 sm:grid-cols-3">
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {statistics.map((item) => {
             const Icon = item.icon;
 
