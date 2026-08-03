@@ -34,7 +34,25 @@ type TelegramUpdate = {
   callback_query?: TelegramCallbackQuery;
 };
 
-const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+type OrderRow = {
+  id: string;
+  status: string;
+  order_number: number | null;
+  loyalty_applied: boolean | null;
+  customer_phone_normalized: string | null;
+};
+
+function getTelegramApi() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+
+  if (!token) {
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN غير موجود في متغيرات البيئة."
+    );
+  }
+
+  return `https://api.telegram.org/bot${token}`;
+}
 
 function getStatusLabel(status: OrderStatus): string {
   const labels: Record<OrderStatus, string> = {
@@ -163,12 +181,23 @@ function updateStatusInMessage(
   originalText: string,
   status: OrderStatus
 ): string {
-  const statusLine = `📌 حالة الطلب: ${getStatusLabel(status)}`;
+  const statusLine = `📌 <b>حالة الطلب:</b> ${getStatusLabel(status)}`;
 
-  const statusPattern = /\n*📌 حالة الطلب:[\s\S]*$/;
+  const htmlStatusPattern = /\n*[🟡✅🍳🚗🎉❌]?\s*<b>الحالة:<\/b>[^\n]*$/;
+  const plainStatusPattern = /\n*📌\s*(?:<b>)?حالة الطلب:(?:<\/b>)?[^\n]*$/;
 
-  if (statusPattern.test(originalText)) {
-    return originalText.replace(statusPattern, `\n\n${statusLine}`);
+  if (htmlStatusPattern.test(originalText)) {
+    return originalText.replace(
+      htmlStatusPattern,
+      `\n\n${statusLine}`
+    );
+  }
+
+  if (plainStatusPattern.test(originalText)) {
+    return originalText.replace(
+      plainStatusPattern,
+      `\n\n${statusLine}`
+    );
   }
 
   return `${originalText}\n\n${statusLine}`;
@@ -178,7 +207,9 @@ async function telegramRequest(
   method: string,
   body: Record<string, unknown>
 ) {
-  const response = await fetch(`${TELEGRAM_API}/${method}`, {
+  const telegramApi = getTelegramApi();
+
+  const response = await fetch(`${telegramApi}/${method}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -207,6 +238,7 @@ async function answerCallbackQuery(
     callback_query_id: callbackQueryId,
     text,
     show_alert: showAlert,
+    cache_time: 0,
   });
 }
 
@@ -220,6 +252,8 @@ async function editTelegramOrderMessage(params: {
     chat_id: params.chatId,
     message_id: params.messageId,
     text: params.text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
     reply_markup: params.replyMarkup ?? {
       inline_keyboard: [],
     },
@@ -228,9 +262,9 @@ async function editTelegramOrderMessage(params: {
 
 export async function POST(request: NextRequest) {
   let callbackQueryId: string | undefined;
+  let callbackAnswered = false;
 
   try {
-   
     const update = (await request.json()) as TelegramUpdate;
     const callbackQuery = update.callback_query;
 
@@ -303,11 +337,22 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    const { data: order, error: findError } = await supabase
-      .from("orders")
-      .select("id, status")
-      .eq("id", orderId)
-      .single();
+    const { data: orderData, error: findError } =
+      await supabase
+        .from("orders")
+        .select(
+          `
+            id,
+            status,
+            order_number,
+            loyalty_applied,
+            customer_phone_normalized
+          `
+        )
+        .eq("id", orderId)
+        .single();
+
+    const order = orderData as OrderRow | null;
 
     if (findError || !order) {
       await answerCallbackQuery(
@@ -328,9 +373,7 @@ export async function POST(request: NextRequest) {
     if (!isOrderStatus(currentStatus)) {
       await answerCallbackQuery(
         callbackQuery.id,
-        `حالة الطلب الحالية غير مدعومة: ${String(
-          order.status
-        )}`,
+        `حالة الطلب الحالية غير مدعومة: ${String(order.status)}`,
         true
       );
 
@@ -365,14 +408,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const { error: updateError } = await supabase
-      .from("orders")
-      .update({
-        status: nextStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", orderId)
-      .eq("status", currentStatus);
+    // يوقف دوران زر تيليجرام بسرعة، ثم نكمل التحديث.
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "جاري تحديث حالة الطلب..."
+    );
+    callbackAnswered = true;
+
+    const { data: updatedOrder, error: updateError } =
+      await supabase
+        .from("orders")
+        .update({
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", orderId)
+        .eq("status", currentStatus)
+        .select("id, status")
+        .maybeSingle();
 
     if (updateError) {
       throw new Error(
@@ -380,8 +433,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!updatedOrder) {
+      return NextResponse.json({
+        ok: true,
+        unchangedByConcurrency: true,
+      });
+    }
+
+    /*
+     * لا نحتاج تصفير عداد الولاء هنا.
+     * نظام الولاء في /api/orders يعتمد على:
+     * 1) الطلبات delivered غير المخفّضة بعد آخر طلب مكافأة delivered.
+     * 2) loyalty_applied لتمييز طلب المكافأة.
+     * لذلك مجرد تحويل الحالة إلى delivered يكفي لبدء/إكمال الدورة تلقائيًا.
+     */
+
     const updatedMessage = updateStatusInMessage(
-      telegramMessage.text ?? `طلب رقم: ${orderId}`,
+      telegramMessage.text ??
+        `طلب رقم: #${order.order_number ?? orderId}`,
       nextStatus
     );
 
@@ -392,21 +461,19 @@ export async function POST(request: NextRequest) {
       replyMarkup: getOrderKeyboard(orderId, nextStatus),
     });
 
-    await answerCallbackQuery(
-      callbackQuery.id,
-      getStatusLabel(nextStatus)
-    );
-
     return NextResponse.json({
       ok: true,
       orderId,
+      orderNumber: order.order_number,
       previousStatus: currentStatus,
       status: nextStatus,
+      loyaltyApplied: order.loyalty_applied === true,
+      loyaltyCycleUpdated: nextStatus === "delivered",
     });
   } catch (error) {
     console.error("Telegram webhook error:", error);
 
-    if (callbackQueryId) {
+    if (callbackQueryId && !callbackAnswered) {
       try {
         await answerCallbackQuery(
           callbackQueryId,
