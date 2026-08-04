@@ -6,7 +6,7 @@ import {
   ShoppingBag,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useCart } from "../../context/cart-context";
 import CartItem from "./CartItem";
@@ -25,8 +25,12 @@ type PlatformSettings = {
   orders_paused_message?: string;
 
   delivery_enabled?: boolean;
+
   restaurant_latitude?: number;
   restaurant_longitude?: number;
+
+  kitchen_latitude?: number;
+  kitchen_longitude?: number;
 
   delivery_base_distance_km?: number;
   delivery_base_fee?: number;
@@ -94,6 +98,7 @@ type LoyaltyStatus = {
   remaining: number;
 
   reward_ready: boolean;
+  reward_in_use?: boolean;
 
   discount_type: "percentage" | "fixed";
   discount_value: number;
@@ -254,9 +259,6 @@ export default function CartDrawer() {
   const [deliveryDistance, setDeliveryDistance] =
     useState<number | null>(null);
 
-  const [deliveryFee, setDeliveryFee] =
-    useState(0);
-
   const [isLocating, setIsLocating] =
     useState(false);
 
@@ -355,10 +357,16 @@ export default function CartDrawer() {
   }, [closeCart, isSubmitting]);
 
   useEffect(() => {
+    if (!isCartOpen) {
+      return;
+    }
+
     let isMounted = true;
 
     async function loadPlatformSettings() {
       try {
+        setSettingsLoading(true);
+
         const response = await fetch(
           "/api/platform-settings",
           {
@@ -402,10 +410,21 @@ export default function CartDrawer() {
 
     loadPlatformSettings();
 
+    const handleFocus = () => {
+      loadPlatformSettings();
+    };
+
+    window.addEventListener("focus", handleFocus);
+
     return () => {
       isMounted = false;
+
+      window.removeEventListener(
+        "focus",
+        handleFocus
+      );
     };
-  }, []);
+  }, [isCartOpen]);
 
   useEffect(() => {
     const phone = customerPhone.replace(/[^\d]/g, "");
@@ -486,12 +505,14 @@ export default function CartDrawer() {
     settings.delivery_enabled !== false;
 
   const restaurantLatitude = Number(
-    settings.restaurant_latitude ??
+    settings.kitchen_latitude ??
+      settings.restaurant_latitude ??
       DEFAULT_RESTAURANT_LATITUDE
   );
 
   const restaurantLongitude = Number(
-    settings.restaurant_longitude ??
+    settings.kitchen_longitude ??
+      settings.restaurant_longitude ??
       DEFAULT_RESTAURANT_LONGITUDE
   );
 
@@ -535,6 +556,33 @@ export default function CartDrawer() {
     )
   );
 
+  const deliveryFee = useMemo(() => {
+    if (
+      deliveryDistance === null ||
+      !deliveryEnabled ||
+      deliveryDistance >
+        maximumDeliveryDistance
+    ) {
+      return 0;
+    }
+
+    return calculateDeliveryFee({
+      distanceKm: deliveryDistance,
+      baseDistanceKm,
+      baseFee: baseDeliveryFee,
+      stepDistanceKm,
+      stepFee: stepDeliveryFee,
+    });
+  }, [
+    deliveryDistance,
+    deliveryEnabled,
+    maximumDeliveryDistance,
+    baseDistanceKm,
+    baseDeliveryFee,
+    stepDistanceKm,
+    stepDeliveryFee,
+  ]);
+
   const freeDeliveryThreshold = Math.max(
     0,
     Number(settings.free_delivery_threshold ?? 0)
@@ -559,7 +607,6 @@ export default function CartDrawer() {
   function resetLocation() {
     setCustomerLocation(null);
     setDeliveryDistance(null);
-    setDeliveryFee(0);
     setLocationConfirmed(false);
     setLocationError("");
   }
@@ -624,8 +671,7 @@ export default function CartDrawer() {
           roundedDistance >
           maximumDeliveryDistance
         ) {
-          setDeliveryFee(0);
-          setLocationConfirmed(false);
+                setLocationConfirmed(false);
 
           setLocationError(
             `موقعك يبعد ${formatDistance(
@@ -639,16 +685,6 @@ export default function CartDrawer() {
           return;
         }
 
-        const calculatedFee =
-          calculateDeliveryFee({
-            distanceKm: roundedDistance,
-            baseDistanceKm,
-            baseFee: baseDeliveryFee,
-            stepDistanceKm,
-            stepFee: stepDeliveryFee,
-          });
-
-        setDeliveryFee(calculatedFee);
         setLocationConfirmed(true);
         setLocationError("");
         setIsLocating(false);
@@ -1063,6 +1099,18 @@ export default function CartDrawer() {
         result.loyalty?.applied === true &&
         loyaltyDiscount > 0;
 
+      if (loyaltyApplied) {
+        setLoyalty((current) =>
+          current
+            ? {
+                ...current,
+                reward_ready: false,
+                reward_in_use: true,
+              }
+            : current
+        );
+      }
+
       const serverTotal = Math.max(
         0,
         Number(
@@ -1248,9 +1296,11 @@ export default function CartDrawer() {
                     loyalty?.enabled && (
                       <div
                         className={`rounded-2xl border p-4 ${
-                          loyalty.reward_ready
-                            ? "border-[#d4af37]/40 bg-[#d4af37]/10"
-                            : "border-white/10 bg-white/[0.035]"
+                          loyalty.reward_in_use
+                            ? "border-blue-500/30 bg-blue-500/10"
+                            : loyalty.reward_ready
+                              ? "border-[#d4af37]/40 bg-[#d4af37]/10"
+                              : "border-white/10 bg-white/[0.035]"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-4">
@@ -1291,7 +1341,18 @@ export default function CartDrawer() {
                           />
                         </div>
 
-                        {loyalty.reward_ready ? (
+                        {loyalty.reward_in_use ? (
+                          <div className="mt-4 rounded-xl border border-blue-500/25 bg-blue-500/10 px-4 py-3">
+                            <p className="font-black text-blue-300">
+                              🎁 مكافأتك مستخدمة حاليًا
+                            </p>
+
+                            <p className="mt-1 text-sm leading-6 text-white/70">
+                              تم تطبيق خصم الولاء على طلب جارٍ.
+                              بعد تسليم الطلب تبدأ دورة جديدة تلقائيًا.
+                            </p>
+                          </div>
+                        ) : loyalty.reward_ready ? (
                           <div className="mt-4 rounded-xl border border-[#d4af37]/25 bg-black/20 px-4 py-3">
                             <p className="font-black text-[#d4af37]">
                               🎉 لديك مكافأة جاهزة

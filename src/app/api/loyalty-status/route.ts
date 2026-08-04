@@ -1,26 +1,42 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 import { createAdminClient } from "../../../lib/supabase/admin";
 
-type LoyaltySummaryRow = {
-  phone: string;
+type LoyaltySettingsRow = {
+  loyalty_enabled: boolean | null;
+  loyalty_required_orders: number | null;
+  loyalty_discount_type: string | null;
+  loyalty_discount_value: number | null;
+};
+
+type CustomerNameRow = {
   customer_name: string | null;
+};
 
-  loyalty_enabled: boolean;
-  required_orders: number;
-
-  discount_type: "percentage" | "fixed";
-  discount_value: number;
-
-  loyalty_progress: number;
-  remaining_orders: number;
-  reward_ready: boolean;
+type LastRewardRow = {
+  created_at: string;
 };
 
 function normalizePhone(value: unknown) {
   return String(value ?? "")
     .trim()
     .replace(/[^\d]/g, "");
+}
+
+function cleanNumber(
+  value: unknown,
+  fallback = 0
+) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number < 0) {
+    return fallback;
+  }
+
+  return Math.round(number);
 }
 
 export async function GET(
@@ -59,8 +75,11 @@ export async function GET(
     const supabase =
       createAdminClient();
 
+    /*
+     * 1. جلب إعدادات برنامج الولاء.
+     */
     const {
-      data: settings,
+      data: settingsData,
       error: settingsError,
     } = await supabase
       .from("platform_settings")
@@ -85,6 +104,7 @@ export async function GET(
         {
           error:
             "تعذر تحميل إعدادات الولاء.",
+
           details:
             settingsError.message,
         },
@@ -94,33 +114,41 @@ export async function GET(
       );
     }
 
+    const settings =
+      (settingsData ??
+        null) as LoyaltySettingsRow | null;
+
     const loyaltyEnabled =
-      settings?.loyalty_enabled ===
-      true;
+      settings?.loyalty_enabled === true;
 
-    const requiredOrders =
-      Math.max(
-        1,
-        Number(
-          settings?.loyalty_required_orders ??
-            5
-        )
-      );
+    const requiredOrders = Math.max(
+      1,
+      cleanNumber(
+        settings?.loyalty_required_orders,
+        5
+      ) || 5
+    );
 
-    const discountType =
+    const discountType:
+      | "percentage"
+      | "fixed" =
       settings?.loyalty_discount_type ===
       "fixed"
         ? "fixed"
         : "percentage";
 
-    const discountValue =
-      Math.max(
-        0,
-        Number(
-          settings?.loyalty_discount_value ??
-            0
-        )
+    const rawDiscountValue =
+      cleanNumber(
+        settings?.loyalty_discount_value
       );
+
+    const discountValue =
+      discountType === "percentage"
+        ? Math.min(
+            100,
+            rawDiscountValue
+          )
+        : rawDiscountValue;
 
     if (!loyaltyEnabled) {
       return NextResponse.json({
@@ -128,12 +156,14 @@ export async function GET(
         enabled: false,
 
         phone,
+        customer_name: null,
 
         progress: 0,
         required: requiredOrders,
         remaining: requiredOrders,
 
         reward_ready: false,
+        reward_in_use: false,
 
         discount_type:
           discountType,
@@ -143,39 +173,36 @@ export async function GET(
       });
     }
 
+    /*
+     * 2. جلب آخر اسم مستخدم لهذا الرقم.
+     */
     const {
-      data: customer,
+      data: customerData,
       error: customerError,
     } = await supabase
-      .from(
-        "customer_loyalty_summary"
+      .from("orders")
+      .select("customer_name")
+      .eq(
+        "customer_phone_normalized",
+        phone
       )
-      .select(
-        `
-          phone,
-          customer_name,
-          loyalty_enabled,
-          required_orders,
-          discount_type,
-          discount_value,
-          loyalty_progress,
-          remaining_orders,
-          reward_ready
-        `
-      )
-      .eq("phone", phone)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(1)
       .maybeSingle();
 
     if (customerError) {
       console.error(
-        "Customer loyalty error:",
+        "Customer lookup error:",
         customerError
       );
 
       return NextResponse.json(
         {
           error:
-            "تعذر تحميل حالة الولاء.",
+            "تعذر تحميل بيانات الزبون.",
+
           details:
             customerError.message,
         },
@@ -185,68 +212,220 @@ export async function GET(
       );
     }
 
-    if (!customer) {
-      return NextResponse.json({
-        found: false,
-        enabled: true,
+    const customer =
+      (customerData ??
+        null) as CustomerNameRow | null;
 
-        phone,
+    /*
+     * 3. فحص وجود طلب مكافأة جارٍ.
+     *
+     * إذا كانت المكافأة مطبقة على طلب حالته:
+     * new / accepted / preparing / ready
+     *
+     * فهذا يعني أن المكافأة مستخدمة حاليًا،
+     * ولا يجب أن تظهر كأنها جاهزة مرة ثانية.
+     */
+    const {
+      count: activeRewardCount,
+      error: activeRewardError,
+    } = await supabase
+      .from("orders")
+      .select("*", {
+        count: "exact",
+        head: true,
+      })
+      .eq(
+        "customer_phone_normalized",
+        phone
+      )
+      .eq("loyalty_applied", true)
+      .in("status", [
+        "new",
+        "accepted",
+        "preparing",
+        "ready",
+      ]);
 
-        customer_name: null,
+    if (activeRewardError) {
+      console.error(
+        "Active reward lookup error:",
+        activeRewardError
+      );
 
-        progress: 0,
-        required:
-          requiredOrders,
+      return NextResponse.json(
+        {
+          error:
+            "تعذر التحقق من مكافأة الولاء.",
 
-        remaining:
-          requiredOrders,
-
-        reward_ready: false,
-
-        discount_type:
-          discountType,
-
-        discount_value:
-          discountValue,
-      });
+          details:
+            activeRewardError.message,
+        },
+        {
+          status: 500,
+        }
+      );
     }
 
-    const row =
-      customer as LoyaltySummaryRow;
+    const rewardInUse =
+      (activeRewardCount ?? 0) > 0;
+
+    /*
+     * 4. جلب آخر طلب مكافأة تم تسليمه.
+     *
+     * الطلبات العادية بعد هذا التاريخ فقط
+     * تدخل ضمن دورة الولاء الجديدة.
+     */
+    const {
+      data: lastRewardData,
+      error: lastRewardError,
+    } = await supabase
+      .from("orders")
+      .select("created_at")
+      .eq(
+        "customer_phone_normalized",
+        phone
+      )
+      .eq("status", "delivered")
+      .eq("loyalty_applied", true)
+      .order("created_at", {
+        ascending: false,
+      })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastRewardError) {
+      console.error(
+        "Last delivered reward error:",
+        lastRewardError
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "تعذر حساب دورة الولاء.",
+
+          details:
+            lastRewardError.message,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const lastReward =
+      (lastRewardData ??
+        null) as LastRewardRow | null;
+
+    /*
+     * 5. حساب الطلبات العادية المسلّمة
+     * بعد آخر مكافأة مسلّمة.
+     */
+    let completedOrdersQuery =
+      supabase
+        .from("orders")
+        .select("*", {
+          count: "exact",
+          head: true,
+        })
+        .eq(
+          "customer_phone_normalized",
+          phone
+        )
+        .eq("status", "delivered")
+        .eq(
+          "loyalty_applied",
+          false
+        );
+
+    if (lastReward?.created_at) {
+      completedOrdersQuery =
+        completedOrdersQuery.gt(
+          "created_at",
+          lastReward.created_at
+        );
+    }
+
+    const {
+      count: completedOrdersCount,
+      error: completedOrdersError,
+    } = await completedOrdersQuery;
+
+    if (completedOrdersError) {
+      console.error(
+        "Completed loyalty orders error:",
+        completedOrdersError
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "تعذر حساب تقدم الولاء.",
+
+          details:
+            completedOrdersError.message,
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    const completedOrders =
+      completedOrdersCount ?? 0;
+
+    /*
+     * لا نخلي التقدم يتجاوز العدد المطلوب.
+     */
+    const progress = Math.min(
+      completedOrders,
+      requiredOrders
+    );
+
+    const remaining = Math.max(
+      0,
+      requiredOrders - progress
+    );
+
+    /*
+     * المكافأة جاهزة فقط إذا:
+     *
+     * - عدد الطلبات وصل للحد المطلوب.
+     * - لا يوجد طلب مكافأة جارٍ.
+     */
+    const rewardReady =
+      completedOrders >= requiredOrders &&
+      !rewardInUse;
 
     return NextResponse.json({
-      found: true,
-      enabled:
-        row.loyalty_enabled,
+      found: Boolean(customer),
 
-      phone: row.phone,
+      enabled: true,
+
+      phone,
 
       customer_name:
-        row.customer_name,
+        customer?.customer_name ??
+        null,
 
-      progress: Number(
-        row.loyalty_progress ?? 0
-      ),
+      progress,
 
-      required: Number(
-        row.required_orders ??
-          requiredOrders
-      ),
+      required:
+        requiredOrders,
 
-      remaining: Number(
-        row.remaining_orders ??
-          requiredOrders
-      ),
+      remaining,
 
       reward_ready:
-        row.reward_ready === true,
+        rewardReady,
+
+      reward_in_use:
+        rewardInUse,
 
       discount_type:
-        row.discount_type,
+        discountType,
 
-      discount_value: Number(
-        row.discount_value ?? 0
-      ),
+      discount_value:
+        discountValue,
     });
   } catch (error) {
     console.error(
