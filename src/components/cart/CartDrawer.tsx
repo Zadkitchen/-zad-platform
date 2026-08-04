@@ -41,11 +41,38 @@ type CreateOrderResponse = {
   success?: boolean;
 
   order?: {
-  id: string;
-  order_number: number;
-  status: string;
-  created_at: string;
-}
+    id: string;
+    order_number: number;
+    status: string;
+    created_at: string;
+  };
+
+  pricing?: {
+    original_subtotal?: number;
+    global_offer_discount?: number;
+    loyalty_discount?: number;
+    subtotal?: number;
+    total_discount?: number;
+    applied_offer_name?: string | null;
+  };
+
+  loyalty?: {
+    enabled?: boolean;
+    applied?: boolean;
+    discount?: number;
+    completed_orders?: number;
+    required_orders?: number;
+    remaining_orders?: number;
+  };
+
+  delivery?: {
+    distance_km?: number;
+    delivery_fee?: number;
+    total?: number;
+    latitude?: number;
+    longitude?: number;
+    maps_url?: string;
+  };
 
   error?: string;
   details?: string;
@@ -56,7 +83,21 @@ type CustomerLocation = {
   longitude: number;
   accuracy: number;
 };
+type LoyaltyStatus = {
+  found: boolean;
+  enabled: boolean;
 
+  customer_name?: string | null;
+
+  progress: number;
+  required: number;
+  remaining: number;
+
+  reward_ready: boolean;
+
+  discount_type: "percentage" | "fixed";
+  discount_value: number;
+};
 const DEFAULT_WHATSAPP_NUMBER = "9647722032536";
 const DEFAULT_RESTAURANT_NAME = "مطبخ زاد";
 const DEFAULT_SLOGAN = "زاد... نكهة تستحق العودة";
@@ -194,6 +235,12 @@ export default function CartDrawer() {
 
   const [customerPhone, setCustomerPhone] =
     useState("");
+
+  const [loyalty, setLoyalty] =
+    useState<LoyaltyStatus | null>(null);
+
+  const [checkingLoyalty, setCheckingLoyalty] =
+    useState(false);
 
   const [customerAddress, setCustomerAddress] =
     useState("");
@@ -359,6 +406,62 @@ export default function CartDrawer() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const phone = customerPhone.replace(/[^\d]/g, "");
+
+    if (phone.length < 10) {
+      setLoyalty(null);
+      setCheckingLoyalty(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(async () => {
+      try {
+        setCheckingLoyalty(true);
+
+        const response = await fetch(
+          `/api/loyalty-status?phone=${phone}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            "تعذر تحميل حالة الولاء."
+          );
+        }
+
+        const data =
+          (await response.json()) as LoyaltyStatus;
+
+        setLoyalty(data);
+      } catch (error) {
+        if (
+          !controller.signal.aborted
+        ) {
+          console.error(
+            "Loyalty status error:",
+            error
+          );
+          setLoyalty(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setCheckingLoyalty(false);
+        }
+      }
+    }, 500);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [customerPhone]);
 
   const restaurantName =
     settings.restaurant_name?.trim() ||
@@ -596,9 +699,23 @@ export default function CartDrawer() {
     );
   }
 
-  function createWhatsAppMessage(
-    orderReference: string
-  ) {
+  function createWhatsAppMessage(params: {
+    orderReference: string;
+    serverSubtotal: number;
+    serverDeliveryFee: number;
+    serverTotal: number;
+    loyaltyDiscount: number;
+    loyaltyApplied: boolean;
+  }) {
+    const {
+      orderReference,
+      serverSubtotal,
+      serverDeliveryFee,
+      serverTotal,
+      loyaltyDiscount,
+      loyaltyApplied,
+    } = params;
+
     const orderItems = items
       .map((item, index) => {
         const itemTotal =
@@ -641,15 +758,23 @@ export default function CartDrawer() {
       "━━━━━━━━━━━━",
       `عدد القطع: ${totalItems}`,
       `مجموع الوجبات: ${formatPrice(
-        subtotal
+        serverSubtotal
       )} د.ع`,
-      hasFreeDelivery
-        ? `أجرة التوصيل: مجاني`
+
+      loyaltyApplied && loyaltyDiscount > 0
+        ? `خصم الولاء: -${formatPrice(
+            loyaltyDiscount
+          )} د.ع 🎁`
+        : "",
+
+      serverDeliveryFee <= 0
+        ? "أجرة التوصيل: مجاني"
         : `أجرة التوصيل: ${formatPrice(
-            finalDeliveryFee
+            serverDeliveryFee
           )} د.ع`,
+
       `الإجمالي النهائي: ${formatPrice(
-        totalAmount
+        serverTotal
       )} د.ع`,
       "━━━━━━━━━━━━",
       "",
@@ -905,15 +1030,57 @@ export default function CartDrawer() {
         );
       }
 
-      const orderReference =
-  String(result.order.order_number
+      const orderReference = String(
+        result.order.order_number
+      );
 
-  );
+      const serverSubtotal = Math.max(
+        0,
+        Number(
+          result.pricing?.subtotal ??
+            subtotal
+        )
+      );
 
-      const message =
-        createWhatsAppMessage(
-          orderReference
-        );
+      const serverDeliveryFee = Math.max(
+        0,
+        Number(
+          result.delivery?.delivery_fee ??
+            finalDeliveryFee
+        )
+      );
+
+      const loyaltyDiscount = Math.max(
+        0,
+        Number(
+          result.pricing?.loyalty_discount ??
+            result.loyalty?.discount ??
+            0
+        )
+      );
+
+      const loyaltyApplied =
+        result.loyalty?.applied === true &&
+        loyaltyDiscount > 0;
+
+      const serverTotal = Math.max(
+        0,
+        Number(
+          result.delivery?.total ??
+            serverSubtotal +
+              serverDeliveryFee -
+              loyaltyDiscount
+        )
+      );
+
+      const message = createWhatsAppMessage({
+        orderReference,
+        serverSubtotal,
+        serverDeliveryFee,
+        serverTotal,
+        loyaltyDiscount,
+        loyaltyApplied,
+      });
 
       const whatsappUrl =
         `https://wa.me/${whatsappNumber}` +
@@ -1070,6 +1237,89 @@ export default function CartDrawer() {
                     autoComplete="tel"
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition focus:border-[#d4af37]/60 disabled:cursor-not-allowed disabled:opacity-60"
                   />
+
+                  {checkingLoyalty && (
+                    <div className="rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm text-white/60">
+                      جاري التحقق من برنامج الولاء...
+                    </div>
+                  )}
+
+                  {!checkingLoyalty &&
+                    loyalty?.enabled && (
+                      <div
+                        className={`rounded-2xl border p-4 ${
+                          loyalty.reward_ready
+                            ? "border-[#d4af37]/40 bg-[#d4af37]/10"
+                            : "border-white/10 bg-white/[0.035]"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-black text-[#d4af37]">
+                              🎁 برنامج الولاء
+                            </p>
+
+                            {loyalty.customer_name && (
+                              <p className="mt-1 text-xs text-white/45">
+                                أهلاً {loyalty.customer_name}
+                              </p>
+                            )}
+                          </div>
+
+                          <span className="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-black text-white/60">
+                            {loyalty.progress} / {loyalty.required}
+                          </span>
+                        </div>
+
+                        <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/10">
+                          <div
+                            style={{
+                              width: `${
+                                loyalty.required > 0
+                                  ? Math.min(
+                                      100,
+                                      Math.round(
+                                        (loyalty.progress /
+                                          loyalty.required) *
+                                          100
+                                      )
+                                    )
+                                  : 0
+                              }%`,
+                            }}
+                            className="h-full rounded-full bg-[#d4af37] transition-all duration-500"
+                          />
+                        </div>
+
+                        {loyalty.reward_ready ? (
+                          <div className="mt-4 rounded-xl border border-[#d4af37]/25 bg-black/20 px-4 py-3">
+                            <p className="font-black text-[#d4af37]">
+                              🎉 لديك مكافأة جاهزة
+                            </p>
+
+                            <p className="mt-1 text-sm leading-6 text-white/70">
+                              سيتم تطبيق خصم الولاء تلقائيًا على هذا الطلب.
+                            </p>
+
+                            <p className="mt-2 text-sm font-black text-emerald-300">
+                              قيمة الخصم:{" "}
+                              {loyalty.discount_type ===
+                              "percentage"
+                                ? `${loyalty.discount_value}%`
+                                : `${formatPrice(
+                                    loyalty.discount_value
+                                  )} د.ع`}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-4 text-sm leading-6 text-white/60">
+                            {loyalty.remaining === 1
+                              ? "باقي طلب واحد فقط للحصول على مكافأة الولاء."
+                              : `باقي ${loyalty.remaining} طلبات للحصول على مكافأة الولاء.`}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                   <textarea
                     rows={3}
